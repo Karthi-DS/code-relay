@@ -1,0 +1,7 @@
+.blackout {
+  background-color: black;
+}
+
+.blackout * {
+  color: black !important;
+}
