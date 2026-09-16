@@ -107,7 +107,7 @@ async function initDb() {
       );
     `);
 
-    // 2. Problems Table (supports round 1 & round 2, title, description, solution, points, time_limit, sample_test_case)
+    // 2. Problems Table (supports round 1 & round 2, title, description, solution, points, time_limit, sample_test_case, starter_code)
     await client.query(`
       CREATE TABLE IF NOT EXISTS problems (
         id VARCHAR(100) PRIMARY KEY,
@@ -119,8 +119,10 @@ async function initDb() {
         points INT DEFAULT 100,
         time_limit INT DEFAULT 2000,
         sample_test_case JSONB,
+        starter_code JSONB,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
+      ALTER TABLE problems ADD COLUMN IF NOT EXISTS starter_code JSONB;
     `);
 
     // 3. Test Cases Table (inputs, expected outputs, links to problems)
@@ -177,8 +179,8 @@ async function initDb() {
     for (const [roundNum, poolArr] of Object.entries(defaultProblems)) {
       for (const p of poolArr) {
         await client.query(
-          `INSERT INTO problems (id, round, title, difficulty, description, solution, points, time_limit, sample_test_case)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+          `INSERT INTO problems (id, round, title, difficulty, description, solution, points, time_limit, sample_test_case, starter_code)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
            ON CONFLICT (id) DO UPDATE SET
              round = EXCLUDED.round,
              title = EXCLUDED.title,
@@ -187,7 +189,8 @@ async function initDb() {
              solution = EXCLUDED.solution,
              points = EXCLUDED.points,
              time_limit = EXCLUDED.time_limit,
-             sample_test_case = EXCLUDED.sample_test_case`,
+             sample_test_case = EXCLUDED.sample_test_case,
+             starter_code = EXCLUDED.starter_code`,
           [
             p.id,
             parseInt(roundNum, 10),
@@ -198,6 +201,7 @@ async function initDb() {
             p.points || 100,
             p.timeLimit || 2000,
             p.sampleTestCase ? JSON.stringify(p.sampleTestCase) : null,
+            p.starterCode ? JSON.stringify(p.starterCode) : null,
           ]
         );
 
@@ -251,6 +255,7 @@ async function getAllProblemsWithTestCases() {
       ...p,
       timeLimit: p.time_limit,
       sampleTestCase: p.sample_test_case,
+      starterCode: p.starter_code || p.starterCode || null,
       testCases: [],
     };
   });

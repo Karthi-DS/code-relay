@@ -173,7 +173,7 @@ router.post("/unblock-team", authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// POST create a single problem with reference solution and test cases
+// POST create a single problem with reference solution, starter code, and test cases
 router.post("/problems", authMiddleware, adminOnly, async (req, res) => {
   try {
     const {
@@ -186,6 +186,7 @@ router.post("/problems", authMiddleware, adminOnly, async (req, res) => {
       points,
       timeLimit,
       sampleTestCase,
+      starterCode,
       testCases,
     } = req.body;
 
@@ -200,8 +201,8 @@ router.post("/problems", authMiddleware, adminOnly, async (req, res) => {
 
     // Insert or update problem in PostgreSQL
     await query(
-      `INSERT INTO problems (id, round, title, difficulty, description, solution, points, time_limit, sample_test_case)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `INSERT INTO problems (id, round, title, difficulty, description, solution, points, time_limit, sample_test_case, starter_code)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
        ON CONFLICT (id) DO UPDATE SET
          round = EXCLUDED.round,
          title = EXCLUDED.title,
@@ -210,7 +211,8 @@ router.post("/problems", authMiddleware, adminOnly, async (req, res) => {
          solution = EXCLUDED.solution,
          points = EXCLUDED.points,
          time_limit = EXCLUDED.time_limit,
-         sample_test_case = EXCLUDED.sample_test_case`,
+         sample_test_case = EXCLUDED.sample_test_case,
+         starter_code = EXCLUDED.starter_code`,
       [
         problemId,
         roundNum,
@@ -221,6 +223,7 @@ router.post("/problems", authMiddleware, adminOnly, async (req, res) => {
         pts,
         limit,
         sampleTestCase ? JSON.stringify(sampleTestCase) : null,
+        starterCode ? JSON.stringify(starterCode) : null,
       ]
     );
 
@@ -261,7 +264,6 @@ router.put("/problems/:id", authMiddleware, adminOnly, async (req, res) => {
   try {
     const { id } = req.params;
     req.body.id = id;
-    // Re-use POST logic
     const {
       round,
       title,
@@ -271,6 +273,7 @@ router.put("/problems/:id", authMiddleware, adminOnly, async (req, res) => {
       points,
       timeLimit,
       sampleTestCase,
+      starterCode,
       testCases,
     } = req.body;
 
@@ -287,8 +290,9 @@ router.put("/problems/:id", authMiddleware, adminOnly, async (req, res) => {
          solution = $5,
          points = $6,
          time_limit = $7,
-         sample_test_case = $8
-       WHERE id = $9`,
+         sample_test_case = $8,
+         starter_code = $9
+       WHERE id = $10`,
       [
         roundNum,
         title.trim(),
@@ -298,6 +302,7 @@ router.put("/problems/:id", authMiddleware, adminOnly, async (req, res) => {
         pts,
         limit,
         sampleTestCase ? JSON.stringify(sampleTestCase) : null,
+        starterCode ? JSON.stringify(starterCode) : null,
         id,
       ]
     );
@@ -335,7 +340,7 @@ router.delete("/problems/:id", authMiddleware, adminOnly, async (req, res) => {
   }
 });
 
-// POST Batch JSON upload of problems, solutions, and testcases
+// POST Batch JSON upload of problems, solutions, starter code, and testcases
 router.post("/problems/upload-json", authMiddleware, adminOnly, async (req, res) => {
   try {
     const { problems: problemList } = req.body;
@@ -352,8 +357,8 @@ router.post("/problems/upload-json", authMiddleware, adminOnly, async (req, res)
       const limit = parseInt(p.timeLimit || p.time_limit || 2000, 10);
 
       await query(
-        `INSERT INTO problems (id, round, title, difficulty, description, solution, points, time_limit, sample_test_case)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `INSERT INTO problems (id, round, title, difficulty, description, solution, points, time_limit, sample_test_case, starter_code)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (id) DO UPDATE SET
            round = EXCLUDED.round,
            title = EXCLUDED.title,
@@ -362,7 +367,8 @@ router.post("/problems/upload-json", authMiddleware, adminOnly, async (req, res)
            solution = EXCLUDED.solution,
            points = EXCLUDED.points,
            time_limit = EXCLUDED.time_limit,
-           sample_test_case = EXCLUDED.sample_test_case`,
+           sample_test_case = EXCLUDED.sample_test_case,
+           starter_code = EXCLUDED.starter_code`,
         [
           pId,
           roundNum,
@@ -373,6 +379,7 @@ router.post("/problems/upload-json", authMiddleware, adminOnly, async (req, res)
           pts,
           limit,
           p.sampleTestCase ? JSON.stringify(p.sampleTestCase) : null,
+          p.starterCode || p.starter_code ? JSON.stringify(p.starterCode || p.starter_code) : null,
         ]
       );
 
@@ -439,7 +446,7 @@ router.post("/start-round", authMiddleware, adminOnly, async (req, res) => {
     return res.status(400).json({ message: `No problems available for Round ${roundNum} in PostgreSQL database. Please upload problems first.` });
   }
 
-  const duration = 30 * 60 * 1000; // 30 minutes per round
+  const duration = roundNum === 2 ? 45 * 60 * 1000 : 30 * 60 * 1000; // 45 mins for Leg 2, 30 mins for Leg 1
   const startTime = Date.now();
   const endTime = startTime + duration;
 
@@ -550,6 +557,7 @@ router.post("/remove-user", authMiddleware, adminOnly, (req, res) => {
 // Reset entire event
 router.post("/reset", authMiddleware, adminOnly, async (req, res) => {
   const gs = req.gameState;
+  const { keepExistingData } = req.body;
 
   if (gs.roundTimer) clearTimeout(gs.roundTimer);
   if (gs.roundCheckInterval) clearInterval(gs.roundCheckInterval);
@@ -559,27 +567,77 @@ router.post("/reset", authMiddleware, adminOnly, async (req, res) => {
   gs.roundStatus = "waiting";
   gs.roundEndTime = null;
   gs.roundStartTime = null;
-  gs.submissions = {};
-  gs.removedUsers.clear();
-  gs.problemAssignments = {};
-  gs.violations = {};
-  gs.tabKicked = [];
 
-  for (const user of Object.values(gs.onlineUsers)) {
-    user.points = { round1: 0, round2: 0 };
+  if (keepExistingData) {
+    // Keep existing data: submissions, code, points retained in DB and state
+    try {
+      const subRes = await query("SELECT username, round, result FROM submissions WHERE status = 'evaluated'");
+      const pointsMap = {};
+      subRes.rows.forEach((row) => {
+        const uname = row.username;
+        const rKey = `round${row.round}`;
+        const score = Number(row.result?.finalScore ?? row.result?.score ?? 0);
+        if (!pointsMap[uname]) pointsMap[uname] = { round1: 0, round2: 0 };
+        pointsMap[uname][rKey] = (pointsMap[uname][rKey] || 0) + score;
+      });
+
+      for (const [uname, uData] of Object.entries(gs.onlineUsers)) {
+        if (pointsMap[uname]) {
+          uData.points = { ...pointsMap[uname] };
+        }
+      }
+    } catch (err) {
+      console.error("Error recalculating points on reset (keep data):", err);
+    }
+  } else {
+    // Delete existing data from DB and memory
+    gs.submissions = {};
+    gs.teamRelay = {};
+    gs.teamSubmissions = {};
+    gs.removedUsers.clear();
+    gs.problemAssignments = {};
+    gs.violations = {};
+    gs.tabKicked = [];
+
+    for (const user of Object.values(gs.onlineUsers)) {
+      user.points = { round1: 0, round2: 0 };
+    }
+
+    // Clear PostgreSQL submissions table
+    try {
+      await query("DELETE FROM submissions");
+    } catch (err) {
+      console.error("Error clearing submissions on reset:", err);
+    }
+
+    // Clear PostgreSQL team relay event_state
+    try {
+      await query("DELETE FROM event_state WHERE key LIKE 'team_relay_%'");
+    } catch (err) {
+      console.error("Error clearing event_state on reset:", err);
+    }
+
+    // Clear MongoDB team code collection if connected
+    try {
+      const { isMongoConnected, TeamCode } = require("../mongo");
+      if (isMongoConnected()) {
+        await TeamCode.deleteMany({});
+        console.log("🗑️ Cleared MongoDB TeamCode collection on event reset.");
+      }
+    } catch (err) {
+      console.error("Error clearing MongoDB TeamCode collection on reset:", err);
+    }
   }
 
-  // Clear PostgreSQL submissions table
-  try {
-    await query("DELETE FROM submissions");
-  } catch (err) {
-    console.error("Error clearing submissions on reset:", err);
-  }
-
-  req.io.emit("event:reset");
+  req.io.emit("event:reset", { keepExistingData: !!keepExistingData });
   req.io.emit("leaderboard:update", req.app.get("getLeaderboard")());
 
-  res.json({ success: true });
+  res.json({
+    success: true,
+    message: keepExistingData
+      ? "Event reset. Existing submissions, code, and points were kept."
+      : "Event reset. All submissions, code, and points were deleted from database.",
+  });
 });
 
 // Revoke a kick/removal decision
@@ -608,7 +666,15 @@ router.post("/revoke-kick", authMiddleware, adminOnly, (req, res) => {
 // Get all submissions from PostgreSQL
 router.get("/submissions", authMiddleware, adminOnly, async (req, res) => {
   try {
-    const subRes = await query("SELECT * FROM submissions ORDER BY created_at DESC");
+    const subRes = await query(`
+      SELECT s.*, COALESCE(t.team_name, u.team_name) AS team_name
+      FROM submissions s
+      LEFT JOIN users u ON LOWER(s.username) = LOWER(u.username)
+      LEFT JOIN team_associations ta ON u.id = ta.user_id
+      LEFT JOIN teams t ON ta.team_id = t.id
+      WHERE s.status = 'pending' OR s.status = 'ai_pending' OR COALESCE((s.result->>'finalScore')::numeric, (s.result->>'score')::numeric, 0) > 0
+      ORDER BY s.created_at DESC
+    `);
     const problemPools = await getProblemsByRoundMap();
 
     const subs = subRes.rows.map((row) => {
@@ -616,16 +682,22 @@ router.get("/submissions", authMiddleware, adminOnly, async (req, res) => {
       const pool = problemPools[round] || [];
       const problem = pool.find(p => p.id === row.problem_id) || pool[row.problem_idx || 0];
 
+      let computedTeamName = row.team_name;
+      if (!computedTeamName && row.submission_key && row.submission_key.includes("_round")) {
+        computedTeamName = row.submission_key.split("_round")[0];
+      }
+
       return {
         id: row.id,
         submissionKey: row.submission_key,
         username: row.username,
+        teamName: computedTeamName || row.username || "Individual",
         round: row.round,
         problemId: row.problem_id,
         problemIdx: row.problem_idx,
         code: row.code,
         language: row.language,
-        timestamp: Number(row.timestamp),
+        timestamp: Number(row.timestamp) || (row.created_at ? new Date(row.created_at).getTime() : Date.now()),
         status: row.status,
         result: row.result,
         problem,

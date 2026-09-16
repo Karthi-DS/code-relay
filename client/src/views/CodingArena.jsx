@@ -62,9 +62,12 @@ export default function CodingArena() {
   const codeRef = useRef(code);
   const languageRef = useRef(language);
   const problemRef = useRef(problem);
+  const draftsMapRef = useRef(draftsMap);
+
   codeRef.current = code;
   languageRef.current = language;
   problemRef.current = problem;
+  draftsMapRef.current = draftsMap;
 
   // Keyboard shortcut for Zen Mode
   useEffect(() => {
@@ -78,12 +81,13 @@ export default function CodingArena() {
     return () => window.removeEventListener("keydown", handleKeydown);
   }, []);
 
-  // Auto-dismiss submission/result card after 6 seconds
+  // Auto-dismiss submission/result card after 10 seconds ONLY IF accepted (errors stay visible)
   useEffect(() => {
     if (!result) return;
+    if (result.errorType !== "Accepted") return;
     const timer = setTimeout(() => {
       setResult(null);
-    }, 6000);
+    }, 10000);
     return () => clearTimeout(timer);
   }, [result]);
 
@@ -153,12 +157,24 @@ export default function CodingArena() {
     if (!problemsList || !problemsList[newIdx]) return;
 
     const currentProb = problemsList[currentProblemIndex];
-    if (currentProb) {
-      // Save current working code into draftsMap before switching
-      setDraftsMap((prev) => ({
-        ...prev,
-        [currentProb.id]: { code, language },
-      }));
+    const curCode = codeRef.current;
+    const curLang = languageRef.current;
+
+    let updatedDrafts = { ...draftsMapRef.current };
+
+    if (currentProb?.id) {
+      const existingProbDrafts = updatedDrafts[currentProb.id] || {};
+      updatedDrafts = {
+        ...updatedDrafts,
+        [currentProb.id]: {
+          ...existingProbDrafts,
+          code: curCode,
+          language: curLang,
+          [curLang]: curCode,
+        },
+      };
+      draftsMapRef.current = updatedDrafts;
+      setDraftsMap(updatedDrafts);
     }
 
     const nextProb = problemsList[newIdx];
@@ -176,36 +192,44 @@ export default function CodingArena() {
       });
     }
 
-    // 1. FIRST PRIORITY: If code was ALREADY SUBMITTED for this problem, retrieve submitted code!
-    if (submissionsMap[nextProb.id]) {
-      const sub = submissionsMap[nextProb.id];
+    const nextDrafts = updatedDrafts[nextProb.id] || {};
+    const sub = submissionsMap[nextProb.id];
+
+    // Priority 1: If local draft exists for nextProb, load it!
+    if (nextDrafts[curLang] !== undefined) {
+      setCode(nextDrafts[curLang]);
+      setLanguage(curLang);
+      return;
+    } else if (nextDrafts.code !== undefined) {
+      setCode(nextDrafts.code);
+      if (nextDrafts.language) setLanguage(nextDrafts.language);
+      return;
+    }
+
+    // Priority 2: If code was ALREADY SUBMITTED for this problem, retrieve submitted code!
+    if (sub) {
       setCode(sub.code || "");
-      setLanguage(sub.language || "python");
+      setLanguage(sub.language || curLang || "python");
       if (sub.result) setResult(sub.result);
       return;
     }
 
-    // 2. SECOND PRIORITY: If local draft exists for this problem
-    if (draftsMap[nextProb.id] && draftsMap[nextProb.id].code !== undefined) {
-      setCode(draftsMap[nextProb.id].code);
-      setLanguage(draftsMap[nextProb.id].language || "python");
-      return;
-    }
-
-    // 3. THIRD PRIORITY: Fetch team relay draft from server or fallback to starter code
+    // Priority 3: Fetch team relay draft from server or fallback to starter code
     fetchTeamCode(ROUND, nextProb.id)
       .then((data) => {
-        if (data && data.code) {
+        if (data && data.code && data.problemId === nextProb.id) {
           setCode(data.code);
           if (data.language) setLanguage(data.language);
         } else {
-          setCode(getStarterCode(nextProb, language || "python"));
+          setCode(getStarterCode(nextProb, curLang || "python"));
+          setLanguage(curLang || "python");
         }
       })
       .catch(() => {
-        setCode(getStarterCode(nextProb, language || "python"));
+        setCode(getStarterCode(nextProb, curLang || "python"));
+        setLanguage(curLang || "python");
       });
-  }, [currentProblemIndex, problemsList, code, language, submissionsMap, draftsMap, user.teamName, user.username, ROUND]);
+  }, [currentProblemIndex, problemsList, submissionsMap, user.teamName, user.username, ROUND]);
 
   // Register on socket and listen for events
   useEffect(() => {
@@ -307,25 +331,92 @@ export default function CodingArena() {
     return () => clearInterval(interval);
   }, [endTime]);
 
-  // Handle code change by active typist & broadcast to teammate + MongoDB
+  // Handle code change by active typist & broadcast to teammate
   const handleCodeChange = (newCode) => {
     setCode(newCode);
 
-    // Save into draftsMap for active problem
-    if (problem?.id) {
-      setDraftsMap((prev) => ({
-        ...prev,
-        [problem.id]: { code: newCode, language },
-      }));
+    const curProb = problemRef.current;
+    const curLang = languageRef.current;
+
+    // Save into draftsMap for active problem and language
+    if (curProb?.id) {
+      setDraftsMap((prev) => {
+        const nextMap = {
+          ...prev,
+          [curProb.id]: {
+            ...(prev[curProb.id] || {}),
+            code: newCode,
+            language: curLang,
+            [curLang]: newCode,
+          },
+        };
+        draftsMapRef.current = nextMap;
+        return nextMap;
+      });
     }
 
-    if (isMyTurn && user.teamName) {
+    if (isMyTurnRef.current && user.teamName) {
       socket.emit("relay:code_change", {
         teamName: user.teamName,
         code: newCode,
-        language,
+        language: curLang,
         username: user.username,
-        problemId: problem?.id || "",
+        problemId: curProb?.id || "",
+      });
+    }
+  };
+
+  // Handle language switch by user & update code to draft or starter code for new language
+  const handleLanguageChange = (newLang) => {
+    const curProb = problemRef.current;
+    if (!curProb?.id) {
+      setLanguage(newLang);
+      return;
+    }
+
+    const oldLang = languageRef.current;
+    const curCode = codeRef.current;
+    setLanguage(newLang);
+
+    const probDrafts = draftsMapRef.current[curProb.id] || {};
+    const updatedProbDrafts = {
+      ...probDrafts,
+      [oldLang]: curCode,
+    };
+
+    let targetCode = "";
+    if (updatedProbDrafts[newLang] !== undefined) {
+      targetCode = updatedProbDrafts[newLang];
+    } else {
+      // Generate starter code for new language for THIS problem
+      targetCode = getStarterCode(curProb, newLang);
+    }
+
+    setCode(targetCode);
+
+    const nextDraftsObj = {
+      ...updatedProbDrafts,
+      code: targetCode,
+      language: newLang,
+      [newLang]: targetCode,
+    };
+
+    setDraftsMap((prev) => {
+      const nextMap = {
+        ...prev,
+        [curProb.id]: nextDraftsObj,
+      };
+      draftsMapRef.current = nextMap;
+      return nextMap;
+    });
+
+    if (isMyTurnRef.current && user.teamName) {
+      socket.emit("relay:code_change", {
+        teamName: user.teamName,
+        code: targetCode,
+        language: newLang,
+        username: user.username,
+        problemId: curProb.id,
       });
     }
   };
@@ -334,9 +425,9 @@ export default function CodingArena() {
   useEffect(() => {
     const handleRemoteCodeSync = (data) => {
       if (!isMyTurnRef.current) {
-        if (!data.problemId || data.problemId === problem?.id) {
+        if (data.problemId && data.problemId === problemRef.current?.id) {
           if (data.code !== undefined) setCode(data.code);
-          if (data.language && data.language !== language) setLanguage(data.language);
+          if (data.language) setLanguage(data.language);
         }
       }
     };
@@ -344,7 +435,7 @@ export default function CodingArena() {
     const handleRemoteTurnSwitch = (data) => {
       if (data.activeMember !== undefined) setActiveMember(data.activeMember);
       if (data.turnSecondsLeft !== undefined) setTurnSecondsLeft(data.turnSecondsLeft);
-      if (!data.problemId || data.problemId === problem?.id) {
+      if (data.problemId && data.problemId === problemRef.current?.id) {
         if (data.code !== undefined) setCode(data.code);
         if (data.language) setLanguage(data.language);
       }
@@ -371,7 +462,7 @@ export default function CodingArena() {
           [data.problemId]: subEntry,
         }));
 
-        if (data.problemId === problem?.id) {
+        if (data.problemId === problemRef.current?.id) {
           if (data.code !== undefined) setCode(data.code);
           if (data.language) setLanguage(data.language);
           if (data.result) setResult(data.result);
@@ -405,25 +496,7 @@ export default function CodingArena() {
     };
   }, [user.teamName, language, ROUND, problem, currentProblemIndex, handleSwitchProblem]);
 
-  // Handle language selection change
-  const handleLanguageChange = (newLang) => {
-    setLanguage(newLang);
-    if (problem) {
-      if (!code || code === getStarterCode(problem, language)) {
-        const starter = getStarterCode(problem, newLang);
-        setCode(starter);
-        if (isMyTurn && user.teamName) {
-          socket.emit("relay:code_change", {
-            teamName: user.teamName,
-            code: starter,
-            language: newLang,
-            username: user.username,
-            problemId: problem.id,
-          });
-        }
-      }
-    }
-  };
+
 
   // Member 5-Min Turn Countdown Timer
   useEffect(() => {
@@ -618,9 +691,7 @@ export default function CodingArena() {
                   disabled={isEffectiveLocked}
                 >
                   <option value="python">Python</option>
-                  <option value="javascript">JavaScript</option>
                   <option value="java">Java</option>
-                  <option value="cpp">C++</option>
                   <option value="c">C</option>
                 </select>
 
@@ -682,37 +753,7 @@ export default function CodingArena() {
 
             {/* Code Editor Component */}
             <div style={styles.editorWrapper}>
-              {isCurrentProblemSubmitted && (
-                <div style={{
-                  background: "#065f46",
-                  color: "#a7f3d0",
-                  padding: "8px 16px",
-                  fontSize: "12px",
-                  fontWeight: "800",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  borderBottom: "1px solid #047857",
-                  boxShadow: "0 2px 6px rgba(0, 0, 0, 0.2)",
-                  zIndex: 20,
-                }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontSize: "14px" }}>✅</span>
-                    <span>RETRIEVED SUBMITTED CODE: Previously submitted code for "{problem?.title}" is loaded into editor. You can edit and re-submit anytime before the round ends.</span>
-                  </div>
-                  {submissionsMap[problem.id]?.result?.score !== undefined && (
-                    <span style={{
-                      background: "#047857",
-                      color: "#ffffff",
-                      padding: "3px 10px",
-                      borderRadius: "6px",
-                      fontFamily: "'JetBrains Mono', monospace",
-                    }}>
-                      Score: {submissionsMap[problem.id].result.score} PTS
-                    </span>
-                  )}
-                </div>
-              )}
+
 
               {!isMyTurn && roundActive && (
                 <div style={{
@@ -747,43 +788,81 @@ export default function CodingArena() {
               />
             </div>
 
-            {/* Result Panel */}
+            {/* Evaluation Result Panel Window */}
             {result && (
               <div
                 style={{
                   ...styles.resultPanel,
                   borderColor:
-                    result.errorType === "Accepted" ? "rgba(16, 185, 129, 0.4)" : "rgba(244, 63, 94, 0.4)",
+                    result.errorType === "Accepted"
+                      ? "#059669"
+                      : result.errorType === "Wrong Answer"
+                      ? "#d97706"
+                      : "#e11d48",
                 }}
               >
                 <div style={styles.resultHeader}>
                   <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                     <span
-                      className={result.errorType === "Accepted" ? "badge-emerald" : "badge-rose"}
-                      style={{ fontSize: "12px", padding: "6px 14px" }}
+                      style={{
+                        padding: "6px 14px",
+                        borderRadius: "20px",
+                        fontSize: "12px",
+                        fontWeight: "800",
+                        letterSpacing: "0.5px",
+                        background:
+                          result.errorType === "Accepted"
+                            ? "rgba(16, 185, 129, 0.2)"
+                            : result.errorType === "Wrong Answer"
+                            ? "rgba(245, 158, 11, 0.2)"
+                            : "rgba(244, 63, 94, 0.2)",
+                        color:
+                          result.errorType === "Accepted"
+                            ? "#34d399"
+                            : result.errorType === "Wrong Answer"
+                            ? "#fbbf24"
+                            : "#f87171",
+                        border: `1px solid ${
+                          result.errorType === "Accepted"
+                            ? "rgba(52, 211, 153, 0.4)"
+                            : result.errorType === "Wrong Answer"
+                            ? "rgba(251, 191, 36, 0.4)"
+                            : "rgba(248, 113, 113, 0.4)"
+                        }`,
+                      }}
                     >
                       {result.errorType.toUpperCase()}
                     </span>
                     <span style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "600" }}>
-                      (auto-hides in 6s)
+                      {result.errorType === "Accepted" ? "(auto-hides in 10s)" : "(manual dismiss)"}
                     </span>
                   </div>
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <span style={styles.resultScore}>
-                      {result.score} <span style={{ fontSize: '12px', opacity: 0.6 }}>/ {problem?.points || 100} PTS</span>
+                    <span
+                      style={{
+                        ...styles.resultScore,
+                        color: result.errorType === "Accepted" ? "#34d399" : result.score > 0 ? "#fbbf24" : "#f87171",
+                      }}
+                    >
+                      {result.score} <span style={{ fontSize: "12px", opacity: 0.6, color: "#94a3b8" }}>/ {problem?.points || 100} PTS</span>
                     </span>
                     <button
                       onClick={() => setResult(null)}
                       style={{
-                        background: "transparent",
-                        border: "none",
-                        color: "#94a3b8",
-                        fontSize: "16px",
+                        background: "rgba(255, 255, 255, 0.1)",
+                        border: "1px solid rgba(255, 255, 255, 0.2)",
+                        color: "#f8fafc",
+                        fontSize: "14px",
                         fontWeight: "bold",
                         cursor: "pointer",
-                        padding: "0 4px",
+                        width: "28px",
+                        height: "28px",
+                        borderRadius: "50%",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
                       }}
-                      title="Dismiss"
+                      title="Close Window"
                     >
                       ✕
                     </button>
@@ -800,32 +879,61 @@ export default function CodingArena() {
                           background:
                             result.passedCases === result.totalCases
                               ? "linear-gradient(90deg, #10b981, #34d399)"
-                              : "linear-gradient(90deg, #f59e0b, #fbbf24)",
+                              : "linear-gradient(90deg, #ef4444, #f59e0b)",
                         }}
                       />
                     </div>
-                    <span style={styles.testText}>
+                    <span style={{ ...styles.testText, color: "#cbd5e1" }}>
                       {result.passedCases} OF {result.totalCases} TEST CASES PASSED
                     </span>
                   </div>
                 )}
 
-                {result.feedback && (
-                  <div style={styles.feedbackContainer}>
+                {result.feedback && result.feedback.length > 0 && (
+                  <div
+                    style={{
+                      background: "#020617",
+                      border: "1px solid #1e293b",
+                      borderRadius: "10px",
+                      padding: "16px",
+                      margin: "12px 0 16px 0",
+                      maxHeight: "240px",
+                      overflowY: "auto",
+                      fontFamily: "'JetBrains Mono', 'Fira Code', monospace",
+                      fontSize: "12px",
+                      lineHeight: "1.7",
+                      whiteSpace: "pre-wrap",
+                      wordBreak: "break-word",
+                      color: result.errorType === "Accepted" ? "#4ade80" : "#fca5a5",
+                      boxShadow: "inset 0 2px 6px rgba(0, 0, 0, 0.5)",
+                    }}
+                  >
                     {result.feedback.map((f, i) => (
-                      <p key={i} style={styles.feedbackText}>
+                      <div key={i} style={{ marginBottom: "6px" }}>
                         {f}
-                      </p>
+                      </div>
                     ))}
                   </div>
                 )}
 
-                <button
-                  onClick={() => navigate("/leaderboard")}
-                  style={styles.leaderboardBtn}
-                >
-                  VIEW LIVE LEADERBOARD →
-                </button>
+                <div style={{ display: "flex", gap: "10px" }}>
+                  <button
+                    onClick={() => setResult(null)}
+                    style={{
+                      width: "100%",
+                      padding: "10px",
+                      background: "#334155",
+                      color: "#f8fafc",
+                      border: "1px solid #475569",
+                      borderRadius: "8px",
+                      fontWeight: "700",
+                      fontSize: "12px",
+                      cursor: "pointer",
+                    }}
+                  >
+                    ✕ CLOSE WINDOW
+                  </button>
+                </div>
               </div>
             )}
 
@@ -1040,13 +1148,16 @@ const styles = {
     bottom: "20px",
     left: "20px",
     right: "20px",
-    background: "#ffffff",
+    maxHeight: "65vh",
+    overflowY: "auto",
+    background: "#0f172a",
+    color: "#f8fafc",
     backdropFilter: "blur(20px)",
-    border: "1px solid #cbd5e1",
-    borderRadius: "14px",
-    padding: "20px",
+    border: "2px solid #334155",
+    borderRadius: "16px",
+    padding: "22px",
     zIndex: 90,
-    boxShadow: "0 10px 30px rgba(0,0,0,0.08)",
+    boxShadow: "0 20px 50px rgba(0, 0, 0, 0.4)",
     animation: "slideUp 0.4s ease-out",
   },
   resultHeader: {

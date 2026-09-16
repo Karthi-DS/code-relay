@@ -26,6 +26,8 @@ export default function AdminPanel() {
   const [overrideScore, setOverrideScore] = useState("");
   const [manualFeedback, setManualFeedback] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
+  const [filterTeam, setFilterTeam] = useState("all");
+  const [sortSubmissionsBy, setSortSubmissionsBy] = useState("newest");
 
   // ─── Problem & Solution Management State ───
   const [problems, setProblems] = useState([]);
@@ -34,6 +36,7 @@ export default function AdminPanel() {
   const [editingProblem, setEditingProblem] = useState(null);
   const [showJsonModal, setShowJsonModal] = useState(false);
   const [jsonText, setJsonText] = useState("");
+  const [sampleInputLines, setSampleInputLines] = useState([""]);
 
   // ─── Teams Management State ───
   const [teamsList, setTeamsList] = useState([]);
@@ -211,12 +214,21 @@ export default function AdminPanel() {
     }
   };
 
-  const resetEvent = async () => {
-    if (!window.confirm("Reset the entire event? All scores will be lost."))
-      return;
+  // Reset Modal state
+  const [showResetModal, setShowResetModal] = useState(false);
+
+  const resetEvent = () => {
+    setShowResetModal(true);
+  };
+
+  const handleExecuteReset = async (keepExistingData) => {
+    setShowResetModal(false);
     try {
-      await fetchWithAuth("/admin/reset", { method: "POST" });
-      showMessage("Event has been reset!");
+      const res = await fetchWithAuth("/admin/reset", {
+        method: "POST",
+        body: JSON.stringify({ keepExistingData }),
+      });
+      showMessage(res.message || "Event has been reset!");
       fetchState();
     } catch (err) {
       showMessage(`Error: ${err.message}`);
@@ -347,9 +359,63 @@ export default function AdminPanel() {
     }
   };
 
+  // Sample Input line helpers
+  const addSampleInputLine = () => {
+    setSampleInputLines((prev) => [...prev, ""]);
+  };
+
+  const removeSampleInputLine = (idx) => {
+    setSampleInputLines((prev) => prev.filter((_, i) => i !== idx));
+  };
+
+  const updateSampleInputLine = (idx, value) => {
+    setSampleInputLines((prev) => {
+      const updated = [...prev];
+      updated[idx] = value;
+      return updated;
+    });
+  };
+
+  // Test case input line helpers
+  const addTestCaseInputLine = (tcIdx) => {
+    setProbForm((prev) => {
+      const updated = [...prev.testCases];
+      const lines = (updated[tcIdx].input !== undefined && updated[tcIdx].input !== null)
+        ? String(updated[tcIdx].input).split("\n")
+        : [""];
+      lines.push("");
+      updated[tcIdx] = { ...updated[tcIdx], input: lines.join("\n") };
+      return { ...prev, testCases: updated };
+    });
+  };
+
+  const removeTestCaseInputLine = (tcIdx, lineIdx) => {
+    setProbForm((prev) => {
+      const updated = [...prev.testCases];
+      const lines = (updated[tcIdx].input !== undefined && updated[tcIdx].input !== null)
+        ? String(updated[tcIdx].input).split("\n").filter((_, i) => i !== lineIdx)
+        : [""];
+      updated[tcIdx] = { ...updated[tcIdx], input: lines.join("\n") };
+      return { ...prev, testCases: updated };
+    });
+  };
+
+  const updateTestCaseInputLine = (tcIdx, lineIdx, val) => {
+    setProbForm((prev) => {
+      const updated = [...prev.testCases];
+      const lines = (updated[tcIdx].input !== undefined && updated[tcIdx].input !== null)
+        ? String(updated[tcIdx].input).split("\n")
+        : [""];
+      lines[lineIdx] = val;
+      updated[tcIdx] = { ...updated[tcIdx], input: lines.join("\n") };
+      return { ...prev, testCases: updated };
+    });
+  };
+
   // Problem management modal handlers
   const openNewProblemModal = (round = 1) => {
     setEditingProblem(null);
+    setSampleInputLines([""]);
     setProbForm({
       id: `r${round}p_${Date.now().toString().slice(-4)}`,
       round: round,
@@ -362,6 +428,11 @@ export default function AdminPanel() {
       sampleInput: "",
       sampleOutput: "",
       testCases: [{ input: "", expectedOutput: "", isSample: false }],
+      starterCode: {
+        python: "def solution():\n    pass\n",
+        java: "public class Solution {\n    public void solution() {\n        \n    }\n}\n",
+        c: "#include <stdio.h>\n\nvoid solution() {\n    \n}\n",
+      },
     });
     setShowProblemModal(true);
   };
@@ -369,6 +440,19 @@ export default function AdminPanel() {
   const openEditProblemModal = (p) => {
     setEditingProblem(p.id);
     const sample = p.sampleTestCase || p.sample_test_case || {};
+    const sampleInStr = (sample.input !== undefined && sample.input !== null) ? String(sample.input) : "";
+    const sampleOutStr = (sample.output !== undefined && sample.output !== null) ? String(sample.output) : (sample.expectedOutput !== undefined && sample.expectedOutput !== null ? String(sample.expectedOutput) : "");
+    const sc = p.starterCode || p.starter_code || {};
+
+    const formattedTestCases = (p.testCases && p.testCases.length > 0)
+      ? p.testCases.map(tc => ({
+          ...tc,
+          input: tc.input !== undefined && tc.input !== null ? String(tc.input) : "",
+          expectedOutput: tc.expectedOutput !== undefined && tc.expectedOutput !== null ? String(tc.expectedOutput) : (tc.output !== undefined && tc.output !== null ? String(tc.output) : ""),
+        }))
+      : [{ input: "", expectedOutput: "", isSample: false }];
+
+    setSampleInputLines(sampleInStr ? sampleInStr.split("\n") : [""]);
     setProbForm({
       id: p.id,
       round: p.round,
@@ -378,9 +462,14 @@ export default function AdminPanel() {
       timeLimit: p.timeLimit || p.time_limit || 2000,
       description: p.description || "",
       solution: p.solution || "",
-      sampleInput: sample.input || "",
-      sampleOutput: sample.output || sample.expectedOutput || "",
-      testCases: p.testCases && p.testCases.length > 0 ? p.testCases : [{ input: "", expectedOutput: "", isSample: false }],
+      sampleInput: sampleInStr,
+      sampleOutput: sampleOutStr,
+      testCases: formattedTestCases,
+      starterCode: {
+        python: sc.python || "",
+        java: sc.java || "",
+        c: sc.c || "",
+      },
     });
     setShowProblemModal(true);
   };
@@ -393,6 +482,7 @@ export default function AdminPanel() {
     }
 
     try {
+      const sampleInputStr = sampleInputLines.join("\n");
       const payload = {
         id: probForm.id,
         round: probForm.round,
@@ -402,8 +492,9 @@ export default function AdminPanel() {
         timeLimit: probForm.timeLimit,
         description: probForm.description,
         solution: probForm.solution,
-        sampleTestCase: probForm.sampleInput ? { input: probForm.sampleInput, output: probForm.sampleOutput } : null,
+        sampleTestCase: sampleInputStr.trim() ? { input: sampleInputStr, output: probForm.sampleOutput } : null,
         testCases: probForm.testCases.filter(tc => tc.input || tc.expectedOutput),
+        starterCode: probForm.starterCode || {},
       };
 
       const url = editingProblem ? `/admin/problems/${editingProblem}` : "/admin/problems";
@@ -673,9 +764,20 @@ export default function AdminPanel() {
                       {p.description}
                     </div>
 
-                    <div style={{ display: "flex", gap: "16px", fontSize: "11px", color: "#94a3b8" }}>
+                    <div style={{ display: "flex", gap: "16px", fontSize: "11px", color: "#94a3b8", flexWrap: "wrap" }}>
                       <span>💡 Solution: {p.solution ? "Available ✅" : "None ❌"}</span>
-                      <span>🧪 Test Cases: {(p.testCases || []).length + (p.sampleTestCase ? 1 : 0)} pairs</span>
+                      <span>🧪 Test Cases: {(p.testCases || []).filter(tc => !tc.isSample).length} Hidden | {(p.testCases || []).filter(tc => tc.isSample).length + (p.sampleTestCase ? 1 : 0)} Sample</span>
+                      <span>
+                        💻 Starter Code: {
+                          (p.starterCode || p.starter_code) ? (
+                            <>
+                              {(p.starterCode || p.starter_code).python ? "PY ✅ " : "PY ❌ "}
+                              {(p.starterCode || p.starter_code).java ? "JAVA ✅ " : "JAVA ❌ "}
+                              {(p.starterCode || p.starter_code).c ? "C ✅" : "C ❌"}
+                            </>
+                          ) : "Default Stubs"
+                        }
+                      </span>
                     </div>
                   </div>
 
@@ -827,81 +929,201 @@ export default function AdminPanel() {
         </div>
 
         {/* ─── Submissions Panel ─── */}
-        <div style={styles.glassCard}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <h3 style={{ ...styles.cardSectionTitle, margin: 0 }}>SUBMISSIONS ({submissions.length})</h3>
-              <button
-                onClick={fetchState}
-                style={{
-                  background: "rgba(99, 102, 241, 0.15)",
-                  border: "1px solid rgba(99, 102, 241, 0.4)",
-                  color: "#818cf8",
-                  padding: "4px 10px",
-                  borderRadius: "6px",
-                  fontSize: "11px",
-                  fontWeight: "700",
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "4px",
-                }}
-                title="Refresh Submissions"
-              >
-                🔄 REFRESH
-              </button>
-            </div>
-            <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
-              {[
-                { key: "all",       label: "ALL",      cls: "badge-indigo" },
-                { key: "pending",   label: "⏳ PENDING", cls: "badge-amber" },
-                { key: "ai_pending",label: "🟡 REVIEW",  cls: "badge-cyan" },
-                { key: "evaluated", label: "🟢 DONE",    cls: "badge-emerald" },
-              ].map(({ key, label, cls }) => (
-                <button
-                  key={key}
-                  onClick={() => setFilterStatus(key)}
-                  className={filterStatus === key ? cls : ""}
-                  style={{
-                    padding: "4px 12px",
-                    background: filterStatus === key ? "rgba(99, 102, 241, 0.2)" : "transparent",
-                    border: `1px solid ${filterStatus === key ? "#6366f1" : "rgba(255, 255, 255, 0.1)"}`,
-                    color: filterStatus === key ? "#f8fafc" : "#64748b",
-                    borderRadius: "6px",
-                    fontSize: "11px",
-                    cursor: "pointer",
-                    fontWeight: "600",
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-          </div>
+        {(() => {
+          const uniqueSubmissionTeams = Array.from(
+            new Set([
+              ...teamsList.map((t) => t.teamName).filter(Boolean),
+              ...submissions.map((s) => s.teamName).filter(Boolean),
+            ])
+          ).sort();
 
-          <div style={styles.list}>
-            {submissions.filter(s => filterStatus === "all" || s.status === filterStatus).length === 0 ? (
-              <p style={styles.emptyText}>No submissions found.</p>
-            ) : (
-              submissions.filter(s => filterStatus === "all" || s.status === filterStatus).map((sub, idx) => (
-                <div key={idx} style={styles.userRow}>
-                  <div>
-                    <span style={{ color: "#f8fafc", fontWeight: "700" }}>{sub.username}</span>
-                    <span style={{ color: "#64748b", fontSize: "12px", marginLeft: "10px" }}>LEG {sub.round} · {sub.language?.toUpperCase()}</span>
+          const processedSubmissions = () => {
+            let list = [...submissions];
+
+            if (filterStatus !== "all") {
+              list = list.filter((s) => s.status === filterStatus);
+            }
+
+            if (filterTeam !== "all") {
+              list = list.filter((s) => (s.teamName || "").toLowerCase() === filterTeam.toLowerCase());
+            }
+
+            list.sort((a, b) => {
+              if (sortSubmissionsBy === "newest") return (b.timestamp || 0) - (a.timestamp || 0);
+              if (sortSubmissionsBy === "oldest") return (a.timestamp || 0) - (b.timestamp || 0);
+              if (sortSubmissionsBy === "team_asc") return (a.teamName || "").localeCompare(b.teamName || "");
+              if (sortSubmissionsBy === "team_desc") return (b.teamName || "").localeCompare(a.teamName || "");
+              if (sortSubmissionsBy === "score_desc") {
+                const scoreA = Number(a.result?.finalScore ?? a.result?.score ?? 0);
+                const scoreB = Number(b.result?.finalScore ?? b.result?.score ?? 0);
+                return scoreB - scoreA;
+              }
+              return 0;
+            });
+
+            return list;
+          };
+
+          const displaySubs = processedSubmissions();
+
+          return (
+            <div style={styles.glassCard}>
+              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "16px", flexWrap: "wrap", gap: "10px" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <h3 style={{ ...styles.cardSectionTitle, margin: 0 }}>SUBMISSIONS & TIMELINE ({displaySubs.length})</h3>
+                  <button
+                    onClick={fetchState}
+                    style={{
+                      background: "rgba(99, 102, 241, 0.15)",
+                      border: "1px solid rgba(99, 102, 241, 0.4)",
+                      color: "#818cf8",
+                      padding: "4px 10px",
+                      borderRadius: "6px",
+                      fontSize: "11px",
+                      fontWeight: "700",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "4px",
+                    }}
+                    title="Refresh Submissions"
+                  >
+                    🔄 REFRESH
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" }}>
+                  {/* Team Filter Dropdown */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "700" }}>TEAM:</label>
+                    <select
+                      value={filterTeam}
+                      onChange={(e) => setFilterTeam(e.target.value)}
+                      style={{
+                        background: "rgba(15, 23, 42, 0.6)",
+                        border: "1px solid rgba(255, 255, 255, 0.15)",
+                        color: "#f8fafc",
+                        padding: "5px 10px",
+                        borderRadius: "6px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="all" style={{ background: "#0f172a" }}>👥 All Teams</option>
+                      {uniqueSubmissionTeams.map((t) => (
+                        <option key={t} value={t} style={{ background: "#0f172a" }}>
+                          👥 {t}
+                        </option>
+                      ))}
+                    </select>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    <span style={{ fontSize: "12px", color: sub.status === "evaluated" ? "#34d399" : "#fbbf24", fontWeight: "700" }}>
-                      {sub.result?.finalScore ?? 0} PTS
-                    </span>
-                    <button onClick={() => { setViewedCode(sub); setOverrideScore(""); setManualFeedback(""); }} style={styles.editBtn}>
-                      VIEW & EVALUATE
-                    </button>
+
+                  {/* Sort Dropdown */}
+                  <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+                    <label style={{ fontSize: "11px", color: "#94a3b8", fontWeight: "700" }}>SORT BY:</label>
+                    <select
+                      value={sortSubmissionsBy}
+                      onChange={(e) => setSortSubmissionsBy(e.target.value)}
+                      style={{
+                        background: "rgba(15, 23, 42, 0.6)",
+                        border: "1px solid rgba(255, 255, 255, 0.15)",
+                        color: "#f8fafc",
+                        padding: "5px 10px",
+                        borderRadius: "6px",
+                        fontSize: "11px",
+                        fontWeight: "600",
+                        cursor: "pointer",
+                      }}
+                    >
+                      <option value="newest" style={{ background: "#0f172a" }}>⏱️ Newest First</option>
+                      <option value="oldest" style={{ background: "#0f172a" }}>⏱️ Oldest First</option>
+                      <option value="team_asc" style={{ background: "#0f172a" }}>👥 Team Name (A - Z)</option>
+                      <option value="team_desc" style={{ background: "#0f172a" }}>👥 Team Name (Z - A)</option>
+                      <option value="score_desc" style={{ background: "#0f172a" }}>⭐ Highest Score</option>
+                    </select>
+                  </div>
+
+                  {/* Status Filter Buttons */}
+                  <div style={{ display: "flex", gap: "6px", flexWrap: "wrap" }}>
+                    {[
+                      { key: "all",       label: "ALL",      cls: "badge-indigo" },
+                      { key: "pending",   label: "⏳ PENDING", cls: "badge-amber" },
+                      { key: "ai_pending",label: "🟡 REVIEW",  cls: "badge-cyan" },
+                      { key: "evaluated", label: "🟢 DONE",    cls: "badge-emerald" },
+                    ].map(({ key, label, cls }) => (
+                      <button
+                        key={key}
+                        onClick={() => setFilterStatus(key)}
+                        className={filterStatus === key ? cls : ""}
+                        style={{
+                          padding: "4px 12px",
+                          background: filterStatus === key ? "rgba(99, 102, 241, 0.2)" : "transparent",
+                          border: `1px solid ${filterStatus === key ? "#6366f1" : "rgba(255, 255, 255, 0.1)"}`,
+                          color: filterStatus === key ? "#f8fafc" : "#64748b",
+                          borderRadius: "6px",
+                          fontSize: "11px",
+                          cursor: "pointer",
+                          fontWeight: "600",
+                        }}
+                      >
+                        {label}
+                      </button>
+                    ))}
                   </div>
                 </div>
-              ))
-            )}
-          </div>
-        </div>
+              </div>
+
+              <div style={styles.list}>
+                {displaySubs.length === 0 ? (
+                  <p style={styles.emptyText}>No submissions found matching selected filters.</p>
+                ) : (
+                  displaySubs.map((sub, idx) => (
+                    <div key={sub.submissionKey || idx} style={styles.userRow}>
+                      <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
+                          <span style={{ color: "#818cf8", fontWeight: "800", fontSize: "14px" }}>
+                            👥 {sub.teamName || "No Team"}
+                          </span>
+                          <span style={{ color: "#94a3b8", fontWeight: "600", fontSize: "12px" }}>
+                            (👤 {sub.username})
+                          </span>
+                        </div>
+                        <div style={{ color: "#64748b", fontSize: "12px", display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+                          <span className="badge-indigo" style={{ fontSize: "9px" }}>LEG {sub.round}</span>
+                          <span>·</span>
+                          <span style={{ textTransform: "uppercase", fontWeight: "700" }}>{sub.language}</span>
+                          {sub.problem && (
+                            <>
+                              <span>·</span>
+                              <span style={{ color: "#cbd5e1", fontWeight: "600" }}>{sub.problem.title}</span>
+                            </>
+                          )}
+                          {sub.timestamp && (
+                            <>
+                              <span>·</span>
+                              <span style={{ color: "#64748b", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}>
+                                ⏱️ {new Date(sub.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                        <span style={{ fontSize: "13px", color: sub.status === "evaluated" ? "#34d399" : "#fbbf24", fontWeight: "800", fontFamily: "'JetBrains Mono', monospace" }}>
+                          {sub.result?.finalScore ?? sub.result?.score ?? 0} PTS
+                        </span>
+                        <button onClick={() => { setViewedCode(sub); setOverrideScore(""); setManualFeedback(""); }} style={styles.editBtn}>
+                          VIEW & EVALUATE
+                        </button>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ─── Add/Edit Problem Modal ─── */}
         {showProblemModal && (
@@ -1009,57 +1231,195 @@ export default function AdminPanel() {
                   />
                 </div>
 
-                {/* Sample Test Case */}
+                {/* Starter Code Section */}
                 <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "16px" }}>
-                  <div style={{ color: "#4f46e5", fontSize: "12px", fontWeight: "800", marginBottom: "12px" }}>VISIBLE SAMPLE TEST CASE</div>
-                  <div style={{ display: "flex", gap: "12px" }}>
-                    <div style={{ flex: 1 }}>
-                      <label style={styles.formLabel}>SAMPLE INPUT</label>
+                  <div style={{ color: "#059669", fontSize: "12px", fontWeight: "800", marginBottom: "12px", display: "flex", alignItems: "center", gap: "6px" }}>
+                    💻 STARTER CODE PER LANGUAGE (INITIAL FUNCTION SIGNATURES)
+                  </div>
+                  
+                  <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                    <div>
+                      <label style={{ ...styles.formLabel, color: "#059669" }}>🐍 PYTHON STARTER CODE</label>
                       <textarea
-                        rows={2}
-                        value={probForm.sampleInput}
-                        onChange={(e) => setProbForm({ ...probForm, sampleInput: e.target.value })}
-                        style={styles.formInput}
+                        rows={3}
+                        value={probForm.starterCode?.python || ""}
+                        onChange={(e) => setProbForm({
+                          ...probForm,
+                          starterCode: { ...probForm.starterCode, python: e.target.value }
+                        })}
+                        placeholder="def solution():\n    pass"
+                        style={{ ...styles.formInput, fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}
                       />
                     </div>
+
+                    <div>
+                      <label style={{ ...styles.formLabel, color: "#0284c7" }}>☕ JAVA STARTER CODE</label>
+                      <textarea
+                        rows={4}
+                        value={probForm.starterCode?.java || ""}
+                        onChange={(e) => setProbForm({
+                          ...probForm,
+                          starterCode: { ...probForm.starterCode, java: e.target.value }
+                        })}
+                        placeholder="public class Solution {\n    public void solution() {\n        \n    }\n}"
+                        style={{ ...styles.formInput, fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}
+                      />
+                    </div>
+
+                    <div>
+                      <label style={{ ...styles.formLabel, color: "#d97706" }}>⚡ C STARTER CODE</label>
+                      <textarea
+                        rows={4}
+                        value={probForm.starterCode?.c || ""}
+                        onChange={(e) => setProbForm({
+                          ...probForm,
+                          starterCode: { ...probForm.starterCode, c: e.target.value }
+                        })}
+                        placeholder="#include <stdio.h>\n\nvoid solution() {\n    \n}"
+                        style={{ ...styles.formInput, fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Visible Sample Test Case */}
+                <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "16px" }}>
+                  <div style={{ color: "#4f46e5", fontSize: "12px", fontWeight: "800", marginBottom: "12px" }}>
+                    VISIBLE SAMPLE TEST CASE
+                  </div>
+                  <div style={{ display: "flex", gap: "16px", alignItems: "flex-start" }}>
+                    {/* Separate Input Line / Param Boxes */}
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                        <label style={styles.formLabel}>SAMPLE INPUT PARAMETERS / LINES</label>
+                        <button
+                          type="button"
+                          onClick={addSampleInputLine}
+                          style={{ ...styles.editBtn, padding: "2px 8px", fontSize: "10px" }}
+                        >
+                          + ADD PARAMETER
+                        </button>
+                      </div>
+
+                      {sampleInputLines.map((line, lIdx) => (
+                        <div key={lIdx} style={{ display: "flex", gap: "8px", marginBottom: "8px", alignItems: "center" }}>
+                          <span style={{ fontSize: "11px", color: "#64748b", fontWeight: "700", width: "65px", flexShrink: 0 }}>
+                            Param {lIdx + 1}:
+                          </span>
+                          <input
+                            type="text"
+                            placeholder={`Input Param ${lIdx + 1} (e.g. ${lIdx === 0 ? "2 7 11 15" : "9"})`}
+                            value={line}
+                            onChange={(e) => updateSampleInputLine(lIdx, e.target.value)}
+                            style={{ ...styles.formInput, flex: 1 }}
+                          />
+                          {sampleInputLines.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeSampleInputLine(lIdx)}
+                              style={{ ...styles.deleteBtn, padding: "4px 8px", fontSize: "11px" }}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Expected Output */}
                     <div style={{ flex: 1 }}>
                       <label style={styles.formLabel}>EXPECTED OUTPUT</label>
                       <textarea
-                        rows={2}
+                        rows={Math.max(2, sampleInputLines.length * 1.5)}
                         value={probForm.sampleOutput}
                         onChange={(e) => setProbForm({ ...probForm, sampleOutput: e.target.value })}
+                        placeholder="e.g. 0 1"
                         style={styles.formInput}
                       />
                     </div>
                   </div>
                 </div>
 
-                {/* Test Cases */}
+                {/* Evaluation Test Cases */}
                 <div style={{ background: "#f8fafc", border: "1px solid #e2e8f0", borderRadius: "10px", padding: "16px" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "12px" }}>
-                    <div style={{ color: "#d97706", fontSize: "12px", fontWeight: "800" }}>HIDDEN EVALUATION TEST CASES</div>
+                    <div style={{ color: "#d97706", fontSize: "12px", fontWeight: "800" }}>EVALUATION & SAMPLE TEST CASES</div>
                     <button type="button" onClick={addTestCaseField} style={styles.editBtn}>+ ADD TEST CASE</button>
                   </div>
 
-                  {probForm.testCases.map((tc, idx) => (
-                    <div key={idx} style={{ display: "flex", gap: "10px", alignItems: "center", marginBottom: "8px" }}>
-                      <input
-                        type="text"
-                        placeholder="Input"
-                        value={tc.input}
-                        onChange={(e) => updateTestCaseField(idx, "input", e.target.value)}
-                        style={{ ...styles.formInput, flex: 1 }}
-                      />
-                      <input
-                        type="text"
-                        placeholder="Expected Output"
-                        value={tc.expectedOutput}
-                        onChange={(e) => updateTestCaseField(idx, "expectedOutput", e.target.value)}
-                        style={{ ...styles.formInput, flex: 1 }}
-                      />
-                      <button type="button" onClick={() => removeTestCaseField(idx)} style={styles.deleteBtn}>✕</button>
-                    </div>
-                  ))}
+                  {probForm.testCases.map((tc, idx) => {
+                    const tcLines = (tc.input !== undefined && tc.input !== null) ? String(tc.input).split("\n") : [""];
+                    return (
+                      <div key={idx} style={{ background: "#ffffff", border: "1px solid #cbd5e1", borderRadius: "8px", padding: "12px", marginBottom: "12px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "10px" }}>
+                          <span style={{ fontSize: "11px", fontWeight: "800", color: "#4f46e5" }}>TEST CASE #{idx + 1}</span>
+                          <div style={{ display: "flex", gap: "12px", alignItems: "center" }}>
+                            <label style={{ fontSize: "11px", fontWeight: "700", color: tc.isSample ? "#0284c7" : "#d97706", display: "flex", alignItems: "center", gap: "4px", cursor: "pointer", userSelect: "none" }}>
+                              <input
+                                type="checkbox"
+                                checked={!!tc.isSample}
+                                onChange={(e) => updateTestCaseField(idx, "isSample", e.target.checked)}
+                              />
+                              {tc.isSample ? "SAMPLE" : "HIDDEN"}
+                            </label>
+                            <button type="button" onClick={() => removeTestCaseField(idx)} style={{ ...styles.deleteBtn, padding: "2px 8px", fontSize: "11px" }}>
+                              🗑️ REMOVE
+                            </button>
+                          </div>
+                        </div>
+
+                        <div style={{ display: "flex", gap: "12px", alignItems: "flex-start" }}>
+                          {/* Input Lines / Param Boxes */}
+                          <div style={{ flex: 1 }}>
+                            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "6px" }}>
+                              <span style={{ fontSize: "10px", fontWeight: "700", color: "#64748b" }}>INPUT PARAMS / LINES</span>
+                              <button
+                                type="button"
+                                onClick={() => addTestCaseInputLine(idx)}
+                                style={{ ...styles.editBtn, padding: "2px 6px", fontSize: "10px" }}
+                              >
+                                + Add Param
+                              </button>
+                            </div>
+
+                            {tcLines.map((line, lIdx) => (
+                              <div key={lIdx} style={{ display: "flex", gap: "6px", marginBottom: "6px", alignItems: "center" }}>
+                                <span style={{ fontSize: "10px", color: "#94a3b8", fontWeight: "700", width: "50px", flexShrink: 0 }}>Param {lIdx + 1}:</span>
+                                <input
+                                  type="text"
+                                  placeholder={`Input param ${lIdx + 1}`}
+                                  value={line}
+                                  onChange={(e) => updateTestCaseInputLine(idx, lIdx, e.target.value)}
+                                  style={{ ...styles.formInput, padding: "6px 10px", fontSize: "12px" }}
+                                />
+                                {tcLines.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeTestCaseInputLine(idx, lIdx)}
+                                    style={{ ...styles.deleteBtn, padding: "2px 6px", fontSize: "10px" }}
+                                  >
+                                    ✕
+                                  </button>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+
+                          {/* Expected Output */}
+                          <div style={{ flex: 1 }}>
+                            <span style={{ fontSize: "10px", fontWeight: "700", color: "#64748b", display: "block", marginBottom: "6px" }}>EXPECTED OUTPUT</span>
+                            <textarea
+                              rows={Math.max(2, tcLines.length)}
+                              placeholder="Expected Output"
+                              value={tc.expectedOutput || ""}
+                              onChange={(e) => updateTestCaseField(idx, "expectedOutput", e.target.value)}
+                              style={{ ...styles.formInput, fontSize: "12px" }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
 
                 <div style={{ display: "flex", justifyContent: "flex-end", gap: "12px", marginTop: "12px" }}>
@@ -1149,6 +1509,86 @@ export default function AdminPanel() {
                 <pre style={{ margin: 0, color: "#0f172a", fontFamily: "'JetBrains Mono', monospace", fontSize: "13px", whiteSpace: "pre-wrap" }}>
                   {viewedCode.code}
                 </pre>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ─── Reset Event Choice Modal ─── */}
+        {showResetModal && (
+          <div style={styles.modalOverlay} onClick={() => setShowResetModal(false)}>
+            <div style={{ ...styles.modalContent, maxWidth: "520px", border: "1px solid #e11d48", padding: "24px" }} onClick={(e) => e.stopPropagation()}>
+              <h3 style={{ color: "#be123c", fontSize: "18px", fontWeight: "800", marginTop: 0, marginBottom: "12px", display: "flex", alignItems: "center", gap: "8px" }}>
+                ⚠️ RESTART / RESET EVENT DATA
+              </h3>
+              <p style={{ color: "#334155", fontSize: "13px", lineHeight: "1.6", marginBottom: "20px" }}>
+                Do you want to keep existing participant data (submissions, saved code, and scores/points) in the database when restarting the event?
+              </p>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" }}>
+                <button
+                  onClick={() => handleExecuteReset(true)}
+                  style={{
+                    padding: "14px 16px",
+                    background: "#ecfdf5",
+                    border: "1px solid #10b981",
+                    color: "#047857",
+                    borderRadius: "10px",
+                    fontWeight: "700",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                  }}
+                >
+                  <span>✅ KEEP EXISTING DATA & RESET ROUND</span>
+                  <span style={{ fontSize: "11px", color: "#059669", fontWeight: "normal" }}>
+                    Preserves submissions, code history, and participant points in DB while resetting the round timer to waiting mode.
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => handleExecuteReset(false)}
+                  style={{
+                    padding: "14px 16px",
+                    background: "#fff1f2",
+                    border: "1px solid #f43f5e",
+                    color: "#be123c",
+                    borderRadius: "10px",
+                    fontWeight: "700",
+                    fontSize: "13px",
+                    cursor: "pointer",
+                    textAlign: "left",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                  }}
+                >
+                  <span>🗑️ DELETE ALL DATA & RESET</span>
+                  <span style={{ fontSize: "11px", color: "#e11d48", fontWeight: "normal" }}>
+                    Permanently deletes all submissions, participant code, and points from the database and memory.
+                  </span>
+                </button>
+              </div>
+
+              <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                <button
+                  onClick={() => setShowResetModal(false)}
+                  style={{
+                    padding: "8px 18px",
+                    background: "#f1f5f9",
+                    border: "1px solid #cbd5e1",
+                    color: "#475569",
+                    borderRadius: "8px",
+                    fontWeight: "700",
+                    fontSize: "12px",
+                    cursor: "pointer",
+                  }}
+                >
+                  CANCEL
+                </button>
               </div>
             </div>
           </div>

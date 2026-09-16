@@ -1,6 +1,7 @@
 /**
  * Starter Code Generator for Code Relay Problems
  * Contains ONLY function signatures without full solution implementations.
+ * Supported languages: python, java, c
  */
 
 const DEFAULT_STARTER_CODES = {
@@ -8,116 +9,75 @@ const DEFAULT_STARTER_CODES = {
     python: `def twoSum(nums, target):
     pass
 `,
-    javascript: `function twoSum(nums, target) {
-    
-}
-`,
-    cpp: `#include <iostream>
-#include <vector>
-using namespace std;
-
-vector<int> twoSum(vector<int>& nums, int target) {
-    
-}
-`,
     c: `#include <stdio.h>
+#include <stdlib.h>
 
-void twoSum(int* nums, int numsSize, int target, int* returnSize) {
+int* twoSum(int* nums, int numsSize, int target, int* returnSize) {
+    *returnSize = 2;
+    int* result = (int*)malloc(2 * sizeof(int));
     
+    return result;
 }
 `,
     java: `import java.util.*;
 
 public class Solution {
     public int[] twoSum(int[] nums, int target) {
-        
+        return new int[]{};
     }
 }
 `
   },
-  r1p2: { // Reverse String
-    python: `def reverseString(s):
+  r1p2: { // Valid Anagram
+    python: `def isAnagram(s, t):
     pass
 `,
-    javascript: `function reverseString(s) {
-    
-}
-`,
-    cpp: `#include <iostream>
-#include <string>
-using namespace std;
-
-string reverseString(string s) {
-    
-}
-`,
     c: `#include <stdio.h>
+#include <stdbool.h>
 #include <string.h>
 
-void reverseString(char* s) {
-    
+bool isAnagram(char* s, char* t) {
+    return false;
 }
 `,
     java: `public class Solution {
-    public String reverseString(String s) {
-        
+    public boolean isAnagram(String s, String t) {
+        return false;
     }
 }
 `
   },
-  r1p3: { // Best Time to Buy and Sell Stock
+  r2p1: { // Best Time to Buy and Sell Stock
     python: `def maxProfit(prices):
     pass
-`,
-    javascript: `function maxProfit(prices) {
-    
-}
-`,
-    cpp: `#include <iostream>
-#include <vector>
-using namespace std;
-
-int maxProfit(vector<int>& prices) {
-    
-}
 `,
     c: `#include <stdio.h>
 
 int maxProfit(int* prices, int pricesSize) {
-    
+    return 0;
 }
 `,
     java: `public class Solution {
     public int maxProfit(int[] prices) {
-        
+        return 0;
     }
 }
 `
   },
-  r2p1: { // FizzBuzz
-    python: `def fizzBuzz(n):
+  r2p2: { // Number of Islands
+    python: `def numIslands(grid):
     pass
 `,
-    javascript: `function fizzBuzz(n) {
-    
-}
-`,
-    cpp: `#include <iostream>
-using namespace std;
-
-void fizzBuzz(int n) {
-    
-}
-`,
     c: `#include <stdio.h>
+#include <stdlib.h>
 
-void fizzBuzz(int n) {
-    
+int numIslands(char** grid, int gridSize, int* gridColSize) {
+    return 0;
 }
 `,
     java: `public class Solution {
-    public void fizzBuzz(int n) {
-        
+    public int numIslands(char[][] grid) {
+        return 0;
     }
 }
 `
@@ -131,8 +91,9 @@ export function getStarterCode(problem, language = "python") {
   if (!problem) return getGenericStarterCode("solution", language);
 
   // 1. Check if problem contains custom starterCode object
-  if (problem.starterCode && problem.starterCode[language]) {
-    return problem.starterCode[language];
+  const sc = problem.starterCode || problem.starter_code;
+  if (sc && sc[language]) {
+    return sc[language];
   }
 
   // 2. Check predefined problem catalog
@@ -158,10 +119,6 @@ function toCamelCase(str) {
 
 function getGenericStarterCode(funcName, language) {
   switch (language) {
-    case "javascript":
-      return `function ${funcName}() {\n    \n}\n`;
-    case "cpp":
-      return `#include <iostream>\nusing namespace std;\n\nvoid ${funcName}() {\n    \n}\n`;
     case "c":
       return `#include <stdio.h>\n\nvoid ${funcName}() {\n    \n}\n`;
     case "java":

@@ -80,13 +80,63 @@ router.get("/submissions-by-round", authMiddleware, async (req, res) => {
   }
 });
 
+// Get full submission timeline for all teams and questions
+router.get("/timeline", authMiddleware, async (req, res) => {
+  try {
+    const subRes = await query(`
+      SELECT s.*, u.team_name, p.title as problem_title
+      FROM submissions s
+      LEFT JOIN users u ON LOWER(s.username) = LOWER(u.username)
+      LEFT JOIN problems p ON s.problem_id = p.id
+      WHERE COALESCE((s.result->>'finalScore')::numeric, (s.result->>'score')::numeric, 0) > 0
+      ORDER BY s.timestamp DESC, s.created_at DESC
+    `);
+
+    const problemPools = await getProblemsByRoundMap();
+
+    const timeline = subRes.rows.map((row) => {
+      const round = row.round;
+      const pool = problemPools[round] || [];
+      const probFromPool = pool.find((p) => p.id === row.problem_id) || pool[row.problem_idx || 0];
+
+      let computedTeamName = row.team_name;
+      if (!computedTeamName && row.submission_key && row.submission_key.includes("_round")) {
+        computedTeamName = row.submission_key.split("_round")[0];
+      }
+
+      const score = Number(row.result?.finalScore ?? row.result?.score ?? 0);
+
+      return {
+        id: row.id,
+        submissionKey: row.submission_key,
+        username: row.username,
+        teamName: computedTeamName || row.username || "Individual",
+        round: row.round,
+        problemId: row.problem_id || probFromPool?.id || "N/A",
+        problemTitle: row.problem_title || probFromPool?.title || `Question ${row.problem_id}`,
+        code: row.code || "",
+        language: row.language || "python",
+        timestamp: Number(row.timestamp) || (row.created_at ? new Date(row.created_at).getTime() : Date.now()),
+        status: row.status || "evaluated",
+        result: row.result || {},
+        score,
+      };
+    });
+
+    res.json({ timeline });
+  } catch (err) {
+    console.error("Error fetching submission timeline:", err);
+    res.status(500).json({ message: "Failed to fetch submission timeline: " + err.message });
+  }
+});
+
 // Run code against test cases (LeetCode-style test runner before or upon submit)
 router.post("/run-test", authMiddleware, async (req, res) => {
   const { code, language, round, problemId } = req.body;
   const { username } = req.user;
   const gs = req.gameState;
 
-  const supportedLanguages = ["python", "javascript", "c", "java", "cpp"];
+  const supportedLanguages = ["python", "java", "c"];
   if (!supportedLanguages.includes(language)) {
     return res.status(400).json({ message: "Unsupported language: " + language });
   }
@@ -133,7 +183,7 @@ router.post("/", authMiddleware, async (req, res) => {
   const gs = req.gameState;
 
   // Validate language
-  const supportedLanguages = ["python", "javascript", "c", "java", "cpp"];
+  const supportedLanguages = ["python", "java", "c"];
   if (!supportedLanguages.includes(language)) {
     return res.status(400).json({ message: "Unsupported language: " + language });
   }
@@ -190,9 +240,18 @@ router.post("/", authMiddleware, async (req, res) => {
 
   // Get previous score for this submission if re-submitting
   const checkSub = await query("SELECT * FROM submissions WHERE submission_key = $1", [submissionKey]);
-  const previousScore = checkSub.rowCount > 0 && checkSub.rows[0].result?.score !== undefined
-    ? Number(checkSub.rows[0].result.score)
-    : (gs.submissions[submissionKey]?.result?.score || 0);
+  let previousScore = 0;
+  let hasPreviousSub = false;
+
+  if (checkSub.rowCount > 0) {
+    hasPreviousSub = true;
+    const prevResult = checkSub.rows[0].result || {};
+    previousScore = Number(prevResult.finalScore ?? prevResult.score ?? 0);
+  } else if (gs.submissions[submissionKey]?.result) {
+    const prevResult = gs.submissions[submissionKey].result || {};
+    previousScore = Number(prevResult.finalScore ?? prevResult.score ?? 0);
+    hasPreviousSub = true;
+  }
 
   const now = Date.now();
 
@@ -203,107 +262,118 @@ router.post("/", authMiddleware, async (req, res) => {
     const { evaluateAgainstTestCases } = require("../services/codeRunner");
     const allTestCases = [...(problem.sampleTestCase ? [{ input: problem.sampleTestCase.input, expectedOutput: problem.sampleTestCase.expectedOutput || problem.sampleTestCase.output, isSample: true }] : []), ...(problem.testCases || [])];
     const evaluationResult = await evaluateAgainstTestCases(language, code, allTestCases, problem.points || 100);
+    const currentScore = Number(evaluationResult.score || 0);
 
-    // Store evaluation submission in PostgreSQL (UPSERT on re-submission)
-    await query(
-      `INSERT INTO submissions (submission_key, username, round, problem_id, problem_idx, code, language, timestamp, status, result)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-       ON CONFLICT (submission_key) DO UPDATE SET
-         code = EXCLUDED.code,
-         language = EXCLUDED.language,
-         timestamp = EXCLUDED.timestamp,
-         status = EXCLUDED.status,
-         result = EXCLUDED.result`,
-      [
-        submissionKey,
-        username,
-        roundNum,
-        problem.id,
-        assignmentIdx >= 0 ? assignmentIdx : 0,
-        code,
-        language,
-        now,
-        "evaluated",
-        JSON.stringify(evaluationResult),
-      ]
-    );
+    const isScoreImproved = currentScore > previousScore;
 
-    // Record team submission state
-    if (userTeamName) {
-      if (!gs.teamSubmissions) gs.teamSubmissions = {};
-      gs.teamSubmissions[`${userTeamName}_round${roundNum}_${problem.id}`] = {
-        submitted: true,
-        submittedBy: username,
-        timestamp: now,
-      };
-      if (gs.teamRelay[userTeamName]) {
-        gs.teamRelay[userTeamName].isSubmitted = true;
-        gs.teamRelay[userTeamName].submittedBy = username;
-      }
-      // Broadcast team submission to all team members via socket
-      req.io.to(`team:${userTeamName}`).emit("relay:team_submitted", {
-        round: roundNum,
-        problemId: problem.id,
-        submittedBy: username,
-        code,
-        language,
-        result: evaluationResult,
-      });
-      req.io.emit(`relay:team_submitted:${userTeamName}`, {
-        round: roundNum,
-        problemId: problem.id,
-        submittedBy: username,
-        code,
-        language,
-        result: evaluationResult,
-      });
-    }
-
-    // Save submitted code to MongoDB for team persistence
-    try {
-      const { saveTeamCode } = require("../mongo");
-      if (userTeamName) {
-        await saveTeamCode({
-          teamName: userTeamName,
-          round: roundNum,
-          problemId: problem.id,
+    if (isScoreImproved) {
+      // Store evaluation submission in PostgreSQL (UPSERT on re-submission when score is higher)
+      await query(
+        `INSERT INTO submissions (submission_key, username, round, problem_id, problem_idx, code, language, timestamp, status, result)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+         ON CONFLICT (submission_key) DO UPDATE SET
+           code = EXCLUDED.code,
+           language = EXCLUDED.language,
+           timestamp = EXCLUDED.timestamp,
+           status = EXCLUDED.status,
+           result = EXCLUDED.result`,
+        [
+          submissionKey,
+          username,
+          roundNum,
+          problem.id,
+          assignmentIdx >= 0 ? assignmentIdx : 0,
           code,
           language,
-          lastUpdatedBy: username,
+          now,
+          "evaluated",
+          JSON.stringify(evaluationResult),
+        ]
+      );
+
+      // Record team submission state
+      if (userTeamName) {
+        if (!gs.teamSubmissions) gs.teamSubmissions = {};
+        gs.teamSubmissions[`${userTeamName}_round${roundNum}_${problem.id}`] = {
+          submitted: true,
+          submittedBy: username,
+          timestamp: now,
+        };
+        if (gs.teamRelay[userTeamName]) {
+          gs.teamRelay[userTeamName].isSubmitted = true;
+          gs.teamRelay[userTeamName].submittedBy = username;
+        }
+
+        // Save submitted code to MongoDB for team persistence
+        try {
+          const { saveTeamCode } = require("../mongo");
+          await saveTeamCode({
+            teamName: userTeamName,
+            round: roundNum,
+            problemId: problem.id,
+            code,
+            language,
+            lastUpdatedBy: username,
+          });
+        } catch (e) {
+          console.warn("MongoDB submission save warning:", e.message);
+        }
+
+        // Broadcast team submission to all team members via socket
+        req.io.to(`team:${userTeamName}`).emit("relay:team_submitted", {
+          round: roundNum,
+          problemId: problem.id,
+          submittedBy: username,
+          code,
+          language,
+          result: evaluationResult,
+        });
+        req.io.emit(`relay:team_submitted:${userTeamName}`, {
+          round: roundNum,
+          problemId: problem.id,
+          submittedBy: username,
+          code,
+          language,
+          result: evaluationResult,
         });
       }
-    } catch (e) {
-      console.warn("MongoDB submission save warning:", e.message);
-    }
 
-    // Store in memory gameState for fast socket sync
-    gs.submissions[submissionKey] = {
-      code,
-      language,
-      problemId: problem.id,
-      problemIdx: assignmentIdx >= 0 ? assignmentIdx : 0,
-      timestamp: now,
-      status: "evaluated",
-      result: evaluationResult,
-    };
+      // Store in memory gameState for fast socket sync
+      gs.submissions[submissionKey] = {
+        code,
+        language,
+        problemId: problem.id,
+        problemIdx: assignmentIdx >= 0 ? assignmentIdx : 0,
+        timestamp: now,
+        status: "evaluated",
+        result: evaluationResult,
+      };
 
-    // Update user points on leaderboard using score delta
-    const roundKey = `round${roundNum}`;
-    const scoreDelta = evaluationResult.score - previousScore;
-    if (gs.onlineUsers[username]) {
-      gs.onlineUsers[username].points[roundKey] = Math.max(0, (gs.onlineUsers[username].points[roundKey] || 0) + scoreDelta);
-    }
+      // Update user points on leaderboard using score delta
+      const roundKey = `round${roundNum}`;
+      const scoreDelta = currentScore - previousScore;
+      if (gs.onlineUsers[username]) {
+        gs.onlineUsers[username].points[roundKey] = Math.max(0, (gs.onlineUsers[username].points[roundKey] || 0) + scoreDelta);
+      }
 
-    const getLeaderboard = req.app.get("getLeaderboard");
-    if (getLeaderboard) {
-      req.io.emit("leaderboard:update", getLeaderboard());
+      const getLeaderboard = req.app.get("getLeaderboard");
+      if (getLeaderboard) {
+        req.io.emit("leaderboard:update", getLeaderboard());
+      }
+    } else {
+      console.log(`[SUBMIT] Current score (${currentScore} PTS) <= previous score (${previousScore} PTS). Timeline was NOT updated.`);
     }
 
     return res.json({
       success: true,
       pending: false,
       hasNext: false,
-      message: "Submission evaluated successfully!",
+      isUpdated: isScoreImproved,
+      previousScore,
+      currentScore,
+      message: isScoreImproved
+        ? "Submission evaluated successfully! Score updated."
+        : `Evaluated score (${currentScore} PTS) is lower than or equal to your previous best score (${previousScore} PTS). Your previous best submission and timeline score remain preserved!`,
       ...evaluationResult,
     });
   } catch (err) {
