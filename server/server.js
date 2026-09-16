@@ -54,7 +54,20 @@ app.use("/auth", require("./routes/auth"));
 app.use("/submit", require("./routes/submit"));
 app.use("/admin", require("./routes/admin"));
 
-app.get("/", (req, res) => res.send("CODE RELAY server running with PostgreSQL backend"));
+// ─── Static Assets (client/build) ───────────────────────────
+const clientBuildPath = path.join(__dirname, "../client/build");
+app.use(express.static(clientBuildPath));
+
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/auth") || req.path.startsWith("/submit") || req.path.startsWith("/admin") || req.path.startsWith("/health")) {
+    return next();
+  }
+  const indexPath = path.join(clientBuildPath, "index.html");
+  if (require("fs").existsSync(indexPath)) {
+    return res.sendFile(indexPath);
+  }
+  res.send("CODE RELAY server running with PostgreSQL backend");
+});
 
 // ─── Helper Functions ───────────────────────────────────────
 function getOnlineCompetitors() {

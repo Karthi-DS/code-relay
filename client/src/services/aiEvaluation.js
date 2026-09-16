@@ -1,4 +1,5 @@
-const DEFAULT_OLLAMA_URL = "http://localhost:11434";
+const hostname = (typeof window !== "undefined" && window.location && window.location.hostname) || "localhost";
+const DEFAULT_OLLAMA_URL = `http://${hostname}:11434`;
 const DEFAULT_OLLAMA_MODEL = "qwen2.5:7b-instruct";
 
 const MIN_CODE_LENGTH = 15;
