@@ -1,18 +1,15 @@
 import Editor from "@monaco-editor/react";
 
-export default function CodeEditor({ mode }) {
-  const isBlur = mode === "BLUR";
-  const isBlackout = mode === "BLACKOUT";
-
+export default function CodeEditor() {
   return (
-    <div className={`h-screen ${isBlackout && "bg-black text-black"}`}>
+    <div className="h-screen">
       <div>
         <Editor
           theme="vs-dark"
           height="90vh"
           options={{
             minimap: { enabled: false },
-            renderLineHighlight: isBlackout ? "none" : "all",
+            renderLineHighlight: "all",
           }}
         />
       </div>

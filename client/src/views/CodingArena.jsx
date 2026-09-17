@@ -116,28 +116,29 @@ export default function CodingArena() {
           setProblem(firstProb);
 
           // Check if first problem was ALREADY SUBMITTED
-          if (subs[firstProb.id]) {
+          if (subs[firstProb.id] && subs[firstProb.id].code) {
             const sub = subs[firstProb.id];
             setCode(sub.code || "");
             if (sub.language) setLanguage(sub.language);
             if (sub.result) setResult(sub.result);
           } else {
+            // Set clean starter code right away so user never sees empty or wrong code
+            const initialStarter = getStarterCode(firstProb, "python");
+            setCode(initialStarter);
+            setLanguage("python");
+
             // Check team draft code or fallback to starter code
             fetchTeamCode(ROUND, firstProb.id)
               .then((data) => {
                 if (!isMounted) return;
-                if (data && data.code) {
+                if (data && data.code && data.code.trim() && data.problemId === firstProb.id) {
                   setCode(data.code);
                   if (data.language) setLanguage(data.language);
-                } else {
-                  setCode(getStarterCode(firstProb, "python"));
                 }
                 if (data && data.activeMember !== undefined) setActiveMember(data.activeMember);
                 if (data && data.turnSecondsLeft !== undefined) setTurnSecondsLeft(data.turnSecondsLeft);
               })
-              .catch(() => {
-                if (isMounted) setCode(getStarterCode(firstProb, "python"));
-              });
+              .catch(() => {});
           }
         }
       } catch (err) {
@@ -195,40 +196,45 @@ export default function CodingArena() {
     const nextDrafts = updatedDrafts[nextProb.id] || {};
     const sub = submissionsMap[nextProb.id];
 
-    // Priority 1: If local draft exists for nextProb, load it!
-    if (nextDrafts[curLang] !== undefined) {
+    // Priority 1: If code was ALREADY SUBMITTED for this problem, retrieve submitted code!
+    if (sub && sub.code) {
+      setCode(sub.code);
+      const targetLang = sub.language || curLang || "python";
+      setLanguage(targetLang);
+      if (sub.result) setResult(sub.result);
+      return;
+    }
+
+    // Priority 2: If local draft exists for nextProb, load it!
+    if (nextDrafts[curLang] !== undefined && nextDrafts[curLang].trim()) {
       setCode(nextDrafts[curLang]);
       setLanguage(curLang);
       return;
-    } else if (nextDrafts.code !== undefined) {
+    } else if (nextDrafts.code !== undefined && nextDrafts.code.trim()) {
       setCode(nextDrafts.code);
       if (nextDrafts.language) setLanguage(nextDrafts.language);
       return;
     }
 
-    // Priority 2: If code was ALREADY SUBMITTED for this problem, retrieve submitted code!
-    if (sub) {
-      setCode(sub.code || "");
-      setLanguage(sub.language || curLang || "python");
-      if (sub.result) setResult(sub.result);
-      return;
-    }
+    // Priority 3: Immediately load clean starter code for nextProb so previous problem's code NEVER lingers
+    const initialStarter = getStarterCode(nextProb, curLang || "python");
+    setCode(initialStarter);
+    setLanguage(curLang || "python");
 
-    // Priority 3: Fetch team relay draft from server or fallback to starter code
+    // Fetch team relay draft from server if available for nextProb
     fetchTeamCode(ROUND, nextProb.id)
       .then((data) => {
-        if (data && data.code && data.problemId === nextProb.id) {
-          setCode(data.code);
-          if (data.language) setLanguage(data.language);
-        } else {
-          setCode(getStarterCode(nextProb, curLang || "python"));
-          setLanguage(curLang || "python");
+        // ONLY apply if user is still on nextProb
+        if (problemRef.current?.id === nextProb.id) {
+          if (data && data.code && data.code.trim() && data.problemId === nextProb.id) {
+            setCode(data.code);
+            if (data.language) setLanguage(data.language);
+          }
+          if (data && data.activeMember !== undefined) setActiveMember(data.activeMember);
+          if (data && data.turnSecondsLeft !== undefined) setTurnSecondsLeft(data.turnSecondsLeft);
         }
       })
-      .catch(() => {
-        setCode(getStarterCode(nextProb, curLang || "python"));
-        setLanguage(curLang || "python");
-      });
+      .catch(() => {});
   }, [currentProblemIndex, problemsList, submissionsMap, user.teamName, user.username, ROUND]);
 
   // Register on socket and listen for events
@@ -385,7 +391,7 @@ export default function CodingArena() {
     };
 
     let targetCode = "";
-    if (updatedProbDrafts[newLang] !== undefined) {
+    if (updatedProbDrafts[newLang] !== undefined && updatedProbDrafts[newLang].trim()) {
       targetCode = updatedProbDrafts[newLang];
     } else {
       // Generate starter code for new language for THIS problem
@@ -429,6 +435,19 @@ export default function CodingArena() {
           if (data.code !== undefined) setCode(data.code);
           if (data.language) setLanguage(data.language);
         }
+      }
+      if (data.problemId && data.code !== undefined) {
+        const pId = data.problemId;
+        const lang = data.language || "python";
+        setDraftsMap((prev) => ({
+          ...prev,
+          [pId]: {
+            ...(prev[pId] || {}),
+            code: data.code,
+            language: lang,
+            [lang]: data.code,
+          },
+        }));
       }
     };
 
@@ -694,10 +713,6 @@ export default function CodingArena() {
                   <option value="java">Java</option>
                   <option value="c">C</option>
                 </select>
-
-                <span className="badge-cyan" style={{ fontSize: "10px" }}>
-                  {ROUND === 1 ? "BLUR PHASE" : "BLACKOUT PHASE"}
-                </span>
 
                 {isCurrentProblemSubmitted && (
                   <span style={{

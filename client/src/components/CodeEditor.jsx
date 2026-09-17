@@ -14,40 +14,11 @@ export default function CodeEditor({
   code,
   round,
 }) {
-  const isRound1 = round === 1;
-  const isRound2 = round === 2;
   const editorRef = useRef(null);
 
   const handleEditorMount = useCallback((editor) => {
     editorRef.current = editor;
-
-    // Disable copy-paste for blind coding
-    editor.onKeyDown((e) => {
-      if ((e.ctrlKey || e.metaKey) && (e.keyCode === 33 /* C */ || e.keyCode === 52 /* V */)) {
-        e.preventDefault();
-      }
-
-      // Block backspace for round 2
-      if (isRound2 && e.browserEvent.key === "Backspace") {
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    });
-
-    // Block cursor selection in round 2
-    editor.onDidChangeCursorSelection((e) => {
-      if (
-        isRound2 &&
-        (e.selection.startLineNumber !== e.selection.endLineNumber ||
-          e.selection.startColumn !== e.selection.endColumn)
-      ) {
-        editor.setPosition({
-          lineNumber: e.selection.endLineNumber,
-          column: e.selection.endColumn,
-        });
-      }
-    });
-  }, [isRound2]);
+  }, []);
 
   return (
     <div
@@ -67,7 +38,7 @@ export default function CodeEditor({
       >
         <Editor
           height="100%"
-          language={isRound2 ? "plaintext" : LANGUAGE_MAP[language] || "python"}
+          language={LANGUAGE_MAP[language] || "python"}
           theme="vs"
           value={code}
           onChange={(value) => onCodeChange(value || "")}
@@ -77,16 +48,16 @@ export default function CodeEditor({
             fontSize: 14,
             fontFamily: "'JetBrains Mono', monospace",
             lineNumbers: "on",
-            cursorStyle: isRound2 ? "block" : "line",
-            cursorWidth: isRound2 ? 3 : 2,
-            renderLineHighlight: isRound2 ? "none" : "all",
-            selectionHighlight: !isRound2,
-            occurrencesHighlight: !isRound2,
+            cursorStyle: "line",
+            cursorWidth: 2,
+            renderLineHighlight: "all",
+            selectionHighlight: true,
+            occurrencesHighlight: true,
             contextmenu: false,
             minimap: { enabled: false },
             glyphMargin: false,
-            folding: !isRound2,
-            cursorBlinking: isRound2 ? "smooth" : "blink",
+            folding: true,
+            cursorBlinking: "blink",
             scrollBeyondLastLine: false,
             automaticLayout: true,
             padding: { top: 16, left: 0 },
@@ -95,21 +66,6 @@ export default function CodeEditor({
           }}
         />
       </div>
-
-      {(isRound1 || isRound2) && (
-        <div
-          style={{
-            position: "absolute",
-            top: 0,
-            left: 0,
-            right: 0,
-            bottom: 0,
-            background: "radial-gradient(circle at center, transparent 0%, rgba(99,102,241,0.05) 100%)",
-            pointerEvents: "none",
-            zIndex: 10,
-          }}
-        />
-      )}
 
       <style>{`
         .monaco-editor .cursor {

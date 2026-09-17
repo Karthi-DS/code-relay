@@ -418,17 +418,38 @@ router.get("/team-code", authMiddleware, async (req, res) => {
     const { getTeamCode } = require("../mongo");
     const userRes = await query("SELECT team_name FROM users WHERE LOWER(username) = LOWER($1)", [username]);
     if (userRes.rowCount === 0 || !userRes.rows[0].team_name) {
-      return res.json({ code: "", language: "python", activeMember: 1 });
+      return res.json({ teamName: "", problemId, code: "", language: "python", activeMember: 1, turnSecondsLeft: 300 });
     }
 
     const teamName = userRes.rows[0].team_name;
-    const teamData = await getTeamCode(teamName, round, problemId);
+    const gs = req.gameState;
+    const teamRelay = gs?.teamRelay?.[teamName];
+    const inMemProb = teamRelay?.problems?.[problemId];
+
+    let code = inMemProb?.code;
+    let language = inMemProb?.language;
+    let activeMember = teamRelay?.activeMember || 1;
+    let turnSecondsLeft = teamRelay?.turnSecondsLeft !== undefined ? teamRelay.turnSecondsLeft : 300;
+
+    if (code === undefined) {
+      const teamData = await getTeamCode(teamName, round, problemId);
+      code = teamData?.code || "";
+      language = teamData?.language || "python";
+      if (teamData?.activeMember !== undefined && !teamRelay) {
+        activeMember = teamData.activeMember;
+      }
+      if (teamData?.turnSecondsLeft !== undefined && !teamRelay) {
+        turnSecondsLeft = teamData.turnSecondsLeft;
+      }
+    }
+
     res.json({
       teamName,
-      code: teamData?.code || "",
-      language: teamData?.language || "python",
-      activeMember: teamData?.activeMember || 1,
-      turnSecondsLeft: teamData?.turnSecondsLeft !== undefined ? teamData.turnSecondsLeft : 300,
+      problemId,
+      code: code || "",
+      language: language || "python",
+      activeMember,
+      turnSecondsLeft,
     });
   } catch (err) {
     console.error("Error fetching team code:", err);

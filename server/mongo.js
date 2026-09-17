@@ -42,27 +42,28 @@ async function initMongo() {
 
 async function saveTeamCode({ teamName, round = 1, code, language, activeMember, turnSecondsLeft, lastUpdatedBy, problemId = "" }) {
   if (!teamName) return null;
-  const pId = problemId || "";
+  // Sanitize teamName if it accidentally contains a problemId suffix from legacy calls
+  const cleanTeam = teamName.includes("_") ? teamName.split("_")[0] : teamName;
+  const pId = problemId || (teamName.includes("_") ? teamName.split("_").slice(1).join("_") : "");
   
   // Try saving to MongoDB if connected
   if (isConnected) {
     try {
-      const updateData = { updatedAt: new Date() };
+      const updateData = { updatedAt: new Date(), teamName: cleanTeam, round: Number(round) || 1, problemId: pId };
       if (code !== undefined) updateData.code = code;
       if (language !== undefined) updateData.language = language;
       if (activeMember !== undefined) updateData.activeMember = activeMember;
       if (turnSecondsLeft !== undefined) updateData.turnSecondsLeft = turnSecondsLeft;
       if (lastUpdatedBy !== undefined) updateData.lastUpdatedBy = lastUpdatedBy;
-      if (problemId !== undefined) updateData.problemId = pId;
 
-      const filter = pId ? { teamName, round: Number(round) || 1, problemId: pId } : { teamName, round: Number(round) || 1 };
+      const filter = { teamName: cleanTeam, round: Number(round) || 1, problemId: pId };
 
       const record = await TeamCode.findOneAndUpdate(
         filter,
         { $set: updateData },
         { upsert: true, new: true }
       );
-      console.log(`💾 [MONGO SAVE] Code & Turn state saved in MongoDB for team: "${teamName}" (Round ${round}, Problem ${pId || "default"}, Active Member ${activeMember || 1})`);
+      console.log(`💾 [MONGO SAVE] Code & Turn state saved in MongoDB for team: "${cleanTeam}" (Round ${round}, Problem "${pId || "default"}", Active Member ${activeMember || 1})`);
       return record;
     } catch (err) {
       console.error("❌ MongoDB Save Error:", err.message);
@@ -72,9 +73,9 @@ async function saveTeamCode({ teamName, round = 1, code, language, activeMember,
   // Also save to PostgreSQL event_state table as secondary backup
   try {
     const { query } = require("./db");
-    const key = `team_relay_${teamName.toLowerCase()}_round_${round}${pId ? `_prob_${pId}` : ""}`;
+    const key = `team_relay_${cleanTeam.toLowerCase()}_round_${round}${pId ? `_prob_${pId}` : ""}`;
     const pgVal = JSON.stringify({
-      teamName,
+      teamName: cleanTeam,
       round: Number(round) || 1,
       problemId: pId,
       code: code !== undefined ? code : "",
@@ -99,12 +100,13 @@ async function saveTeamCode({ teamName, round = 1, code, language, activeMember,
 
 async function getTeamCode(teamName, round = 1, problemId = "") {
   if (!teamName) return null;
-  const pId = problemId || "";
+  const cleanTeam = teamName.includes("_") ? teamName.split("_")[0] : teamName;
+  const pId = problemId || (teamName.includes("_") ? teamName.split("_").slice(1).join("_") : "");
 
   if (isConnected) {
     try {
-      const filter = pId ? { teamName, round: Number(round) || 1, problemId: pId } : { teamName, round: Number(round) || 1 };
-      const record = await TeamCode.findOne(filter);
+      const filter = pId ? { teamName: cleanTeam, round: Number(round) || 1, problemId: pId } : { teamName: cleanTeam, round: Number(round) || 1 };
+      const record = await TeamCode.findOne(filter).sort({ updatedAt: -1 });
       if (record) return record;
     } catch (err) {
       console.error("❌ MongoDB Fetch Error:", err.message);
@@ -114,7 +116,7 @@ async function getTeamCode(teamName, round = 1, problemId = "") {
   // Fallback to PostgreSQL event_state table
   try {
     const { query } = require("./db");
-    const key = `team_relay_${teamName.toLowerCase()}_round_${round}${pId ? `_prob_${pId}` : ""}`;
+    const key = `team_relay_${cleanTeam.toLowerCase()}_round_${round}${pId ? `_prob_${pId}` : ""}`;
     const pgRes = await query("SELECT value FROM event_state WHERE key = $1", [key]);
     if (pgRes.rowCount > 0) {
       return pgRes.rows[0].value;

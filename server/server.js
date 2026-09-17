@@ -228,18 +228,17 @@ io.on("connection", (socket) => {
     }
 
     // Fetch team's saved code & relay turn state from MongoDB/DB
-    let relayState = { activeMember: 1, turnSecondsLeft: 300, code: "", language: "python" };
+    let relayState = { activeMember: 1, turnSecondsLeft: 300, problems: {} };
     if (userTeamName) {
-      const dbRelay = await getTeamCode(userTeamName, gameState.currentRound || 1);
-      if (dbRelay) {
-        relayState = {
-          activeMember: dbRelay.activeMember || 1,
-          turnSecondsLeft: dbRelay.turnSecondsLeft !== undefined ? dbRelay.turnSecondsLeft : 300,
-          code: dbRelay.code || "",
-          language: dbRelay.language || "python",
-        };
-      }
       if (!gameState.teamRelay[userTeamName]) {
+        const dbRelay = await getTeamCode(userTeamName, gameState.currentRound || 1);
+        if (dbRelay) {
+          relayState = {
+            activeMember: dbRelay.activeMember || 1,
+            turnSecondsLeft: dbRelay.turnSecondsLeft !== undefined ? dbRelay.turnSecondsLeft : 300,
+            problems: {},
+          };
+        }
         gameState.teamRelay[userTeamName] = relayState;
       } else {
         relayState = gameState.teamRelay[userTeamName];
@@ -333,48 +332,65 @@ io.on("connection", (socket) => {
 
   // Real-time Code Relay synchronization across teammates with MongoDB save
   socket.on("relay:code_change", async ({ teamName, code, language, username, problemId }) => {
-    if (!teamName) return;
+    if (!teamName || !problemId) return;
+    const cleanTeam = teamName.includes("_") ? teamName.split("_")[0] : teamName;
     const currentRound = gameState.currentRound || 1;
     if (gameState.roundStatus !== "active") return; // Code locked when round not active
 
-    const relayKey = `${teamName}_${problemId || "default"}`;
-    if (!gameState.teamRelay[relayKey]) {
-      gameState.teamRelay[relayKey] = { activeMember: 1, turnSecondsLeft: 300, code: "", language: "python", problemId };
+    if (!gameState.teamRelay[cleanTeam]) {
+      gameState.teamRelay[cleanTeam] = {
+        activeMember: 1,
+        turnSecondsLeft: 300,
+        problems: {},
+      };
     }
-    gameState.teamRelay[relayKey].code = code;
-    if (language) gameState.teamRelay[relayKey].language = language;
+    if (!gameState.teamRelay[cleanTeam].problems) {
+      gameState.teamRelay[cleanTeam].problems = {};
+    }
 
-    // Save to MongoDB
-    await saveTeamCode({
-      teamName,
-      round: currentRound,
-      problemId: problemId || "",
+    gameState.teamRelay[cleanTeam].problems[problemId] = {
       code,
-      language: gameState.teamRelay[relayKey].language,
-      activeMember: gameState.teamRelay[relayKey].activeMember || 1,
-      turnSecondsLeft: gameState.teamRelay[relayKey].turnSecondsLeft || 300,
+      language: language || "python",
+      lastUpdatedBy: username || "",
+    };
+
+    // Save to MongoDB / DB with clean teamName and problemId
+    await saveTeamCode({
+      teamName: cleanTeam,
+      round: currentRound,
+      problemId,
+      code,
+      language: language || "python",
+      activeMember: gameState.teamRelay[cleanTeam].activeMember || 1,
+      turnSecondsLeft: gameState.teamRelay[cleanTeam].turnSecondsLeft || 300,
       lastUpdatedBy: username || "",
     });
 
-    // Broadcast to room & legacy socket topic
-    io.to(`team:${teamName}`).emit("relay:code_sync", {
+    // Broadcast to room & legacy socket topic specifically for this problemId
+    io.to(`team:${cleanTeam}`).emit("relay:code_sync", {
       problemId,
       code,
-      language: gameState.teamRelay[relayKey].language,
-      activeMember: gameState.teamRelay[relayKey].activeMember,
+      language: language || "python",
+      activeMember: gameState.teamRelay[cleanTeam].activeMember,
       updatedBy: username,
     });
-    socket.broadcast.emit(`relay:code_sync:${teamName}`, { problemId, code, language: gameState.teamRelay[relayKey].language });
+    socket.broadcast.emit(`relay:code_sync:${cleanTeam}`, {
+      problemId,
+      code,
+      language: language || "python",
+      updatedBy: username,
+    });
   });
 
   socket.on("relay:problem_switch", ({ teamName, problemIndex, problemId, username }) => {
     if (!teamName) return;
-    io.to(`team:${teamName}`).emit("relay:problem_switch", {
+    const cleanTeam = teamName.includes("_") ? teamName.split("_")[0] : teamName;
+    io.to(`team:${cleanTeam}`).emit("relay:problem_switch", {
       problemIndex,
       problemId,
       switchedBy: username,
     });
-    socket.broadcast.emit(`relay:problem_switch:${teamName}`, {
+    socket.broadcast.emit(`relay:problem_switch:${cleanTeam}`, {
       problemIndex,
       problemId,
       switchedBy: username,
@@ -383,14 +399,31 @@ io.on("connection", (socket) => {
 
   socket.on("relay:get_state", async ({ teamName, round, problemId }, callback) => {
     if (!teamName) return;
+    const cleanTeam = teamName.includes("_") ? teamName.split("_")[0] : teamName;
     const roundNum = Number(round) || gameState.currentRound || 1;
-    const dbState = await getTeamCode(teamName, roundNum, problemId || "");
-    const relayKey = `${teamName}_${problemId || "default"}`;
-    const inMemState = gameState.teamRelay[relayKey] || {};
+    const teamRelay = gameState.teamRelay[cleanTeam];
+    const inMemProb = teamRelay?.problems?.[problemId];
+
+    let code = inMemProb?.code;
+    let language = inMemProb?.language;
+    let activeMember = teamRelay?.activeMember || 1;
+    let turnSecondsLeft = teamRelay?.turnSecondsLeft !== undefined ? teamRelay.turnSecondsLeft : 300;
+
+    if (code === undefined) {
+      const dbState = await getTeamCode(cleanTeam, roundNum, problemId || "");
+      code = dbState?.code || "";
+      language = dbState?.language || "python";
+      if (dbState?.activeMember !== undefined && !teamRelay) activeMember = dbState.activeMember;
+      if (dbState?.turnSecondsLeft !== undefined && !teamRelay) turnSecondsLeft = dbState.turnSecondsLeft;
+    }
+
     const resState = {
+      teamName: cleanTeam,
       problemId,
-      code: inMemState.code !== undefined ? inMemState.code : (dbState?.code || ""),
-      language: inMemState.language || dbState?.language || "python",
+      code,
+      language: language || "python",
+      activeMember,
+      turnSecondsLeft,
     };
     if (typeof callback === "function") callback(resState);
     socket.emit("relay:state_response", resState);
@@ -427,8 +460,11 @@ io.on("connection", (socket) => {
 setInterval(async () => {
   if (gameState.roundStatus !== "active") return;
 
-  for (const [teamName, relay] of Object.entries(gameState.teamRelay)) {
+  for (const [rawTeamName, relay] of Object.entries(gameState.teamRelay)) {
     if (!relay) continue;
+    // Guarantee real team name (in case of legacy keys)
+    const teamName = rawTeamName.includes("_") ? rawTeamName.split("_")[0] : rawTeamName;
+
     if (relay.turnSecondsLeft > 1) {
       relay.turnSecondsLeft--;
     } else {
@@ -440,27 +476,45 @@ setInterval(async () => {
       console.log(`⏱️ [5-MIN AUTO-SWITCH] Team "${teamName}" turned over to Member ${nextMember}`);
 
       try {
-        await saveTeamCode({
-          teamName,
-          round: gameState.currentRound || 1,
-          code: relay.code || "",
-          language: relay.language || "python",
-          activeMember: nextMember,
-          turnSecondsLeft: 300,
-          lastUpdatedBy: "system",
-        });
+        const probKeys = relay.problems ? Object.keys(relay.problems) : [];
+        if (probKeys.length > 0) {
+          for (const pId of probKeys) {
+            const pData = relay.problems[pId];
+            await saveTeamCode({
+              teamName,
+              round: gameState.currentRound || 1,
+              problemId: pId,
+              code: pData.code || "",
+              language: pData.language || "python",
+              activeMember: nextMember,
+              turnSecondsLeft: 300,
+              lastUpdatedBy: "system",
+            });
+          }
+        } else {
+          await saveTeamCode({
+            teamName,
+            round: gameState.currentRound || 1,
+            problemId: "",
+            code: "",
+            language: "python",
+            activeMember: nextMember,
+            turnSecondsLeft: 300,
+            lastUpdatedBy: "system",
+          });
+        }
       } catch (e) {
         console.warn("MongoDB turn switch save error:", e.message);
       }
 
       io.to(`team:${teamName}`).emit("relay:turn_switch", {
+        teamName,
         activeMember: nextMember,
         turnSecondsLeft: 300,
-        code: relay.code,
-        language: relay.language,
         switchedBy: "system",
       });
       io.emit(`relay:turn_switch:${teamName}`, {
+        teamName,
         activeMember: nextMember,
         turnSecondsLeft: 300,
       });

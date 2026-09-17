@@ -84,18 +84,25 @@ import sys
 
 if __name__ == '__main__':
     try:
-        lines = [l.strip() for l in sys.stdin.read().splitlines() if l.strip()]
-        if lines:
-            sol = Solution() if 'Solution' in globals() else None
+        raw_input = sys.stdin.read()
+        lines = [l.strip() for l in raw_input.splitlines() if l.strip()]
+        sol = Solution() if 'Solution' in globals() else None
 
-            fn_twoSum = (getattr(sol, 'twoSum', None) or getattr(sol, 'two_sum', None) or globals().get('twoSum') or globals().get('two_sum'))
-            fn_isAnagram = (getattr(sol, 'isAnagram', None) or getattr(sol, 'is_anagram', None) or globals().get('isAnagram') or globals().get('is_anagram'))
-            fn_reverseString = (getattr(sol, 'reverseString', None) or getattr(sol, 'reverse_string', None) or globals().get('reverseString') or globals().get('reverse_string'))
-            fn_isPalindrome = (getattr(sol, 'isPalindrome', None) or getattr(sol, 'is_palindrome', None) or globals().get('isPalindrome') or globals().get('is_palindrome'))
-            fn_maxProfit = (getattr(sol, 'maxProfit', None) or getattr(sol, 'max_profit', None) or globals().get('maxProfit') or globals().get('max_profit'))
-            fn_numIslands = (getattr(sol, 'numIslands', None) or getattr(sol, 'num_islands', None) or globals().get('numIslands') or globals().get('num_islands'))
-            fn_fizzBuzz = (getattr(sol, 'fizzBuzz', None) or getattr(sol, 'fizz_buzz', None) or globals().get('fizzBuzz') or globals().get('fizz_buzz'))
+        fn_twoSum = (getattr(sol, 'twoSum', None) or getattr(sol, 'two_sum', None) or globals().get('twoSum') or globals().get('two_sum'))
+        fn_isAnagram = (getattr(sol, 'isAnagram', None) or getattr(sol, 'is_anagram', None) or globals().get('isAnagram') or globals().get('is_anagram'))
+        fn_reverseString = (getattr(sol, 'reverseString', None) or getattr(sol, 'reverse_string', None) or globals().get('reverseString') or globals().get('reverse_string'))
+        fn_isPalindrome = (getattr(sol, 'isPalindrome', None) or getattr(sol, 'is_palindrome', None) or globals().get('isPalindrome') or globals().get('is_palindrome'))
+        fn_maxProfit = (getattr(sol, 'maxProfit', None) or getattr(sol, 'max_profit', None) or globals().get('maxProfit') or globals().get('max_profit'))
+        fn_numIslands = (getattr(sol, 'numIslands', None) or getattr(sol, 'num_islands', None) or globals().get('numIslands') or globals().get('num_islands'))
+        fn_fizzBuzz = (getattr(sol, 'fizzBuzz', None) or getattr(sol, 'fizz_buzz', None) or globals().get('fizzBuzz') or globals().get('fizz_buzz'))
+        fn_lengthOfLongestSubstring = (getattr(sol, 'lengthOfLongestSubstring', None) or getattr(sol, 'length_of_longest_substring', None) or globals().get('lengthOfLongestSubstring') or globals().get('length_of_longest_substring'))
 
+        if fn_lengthOfLongestSubstring:
+            s_val = raw_input.rstrip('\\r\\n')
+            res = fn_lengthOfLongestSubstring(s_val)
+            if res is not None:
+                print(res)
+        elif lines:
             if fn_twoSum:
                 all_tokens = [int(x) for line in lines for x in line.split()]
                 if len(lines) >= 2:
@@ -183,9 +190,13 @@ if __name__ == '__main__':
 
 try {
     const fs = require('fs');
-    const inputStr = fs.readFileSync(0, 'utf-8').trim();
-    if (inputStr) {
-        const lines = inputStr.split('\\n').map(l => l.trim()).filter(Boolean);
+    const inputStr = fs.readFileSync(0, 'utf-8');
+    if (typeof lengthOfLongestSubstring === 'function') {
+        const s = inputStr.replace(/[\r\n]+$/, '');
+        const res = lengthOfLongestSubstring(s);
+        if (res !== undefined) console.log(res);
+    } else if (inputStr.trim()) {
+        const lines = inputStr.trim().split('\\n').map(l => l.trim()).filter(Boolean);
         if (typeof twoSum === 'function') {
             const nums = lines[0].split(/\\s+/).map(Number);
             const target = Number(lines[1] || 0);
@@ -309,6 +320,21 @@ int main() {
     if (std::cin >> n) {
         fizzBuzz(n);
     }
+    return 0;
+}
+`;
+      } else if (cppCode.includes("lengthOfLongestSubstring") || cppCode.includes("length_of_longest_substring")) {
+        const fnName = cppCode.includes("length_of_longest_substring") ? "length_of_longest_substring" : "lengthOfLongestSubstring";
+        cppCode += `
+
+#include <iostream>
+#include <string>
+
+int main() {
+    std::string line = "";
+    std::getline(std::cin, line);
+    if (!line.empty() && line.back() == '\\r') line.pop_back();
+    std::cout << ${fnName}(line) << "\\n";
     return 0;
 }
 `;
@@ -459,6 +485,22 @@ int main() {
         buffer[strcspn(buffer, "\\r\\n")] = 0;
         printf("%s\\n", ${fnName}(buffer) ? "true" : "false");
     }
+    return 0;
+}
+`;
+      } else if (cCode.includes("lengthOfLongestSubstring") || cCode.includes("length_of_longest_substring")) {
+        const fnName = cCode.includes("length_of_longest_substring") ? "length_of_longest_substring" : "lengthOfLongestSubstring";
+        cCode += `
+
+#include <stdio.h>
+#include <string.h>
+
+int main() {
+    char s[100000] = "";
+    if (fgets(s, sizeof(s), stdin)) {
+        s[strcspn(s, "\\r\\n")] = 0;
+    }
+    printf("%d\\n", ${fnName}(s));
     return 0;
 }
 `;
@@ -621,6 +663,17 @@ int main() {
                         System.out.println(res);
                         return;
                     }
+                }
+            }
+
+            // Try calling lengthOfLongestSubstring / length_of_longest_substring
+            java.lang.reflect.Method mSubstring = findMethod(${className}.class, new String[]{"lengthOfLongestSubstring", "length_of_longest_substring"}, String.class);
+            if (mSubstring != null) {
+                String s = sc.hasNextLine() ? sc.nextLine().replace("\\r", "") : "";
+                Object res = mSubstring.invoke(solver, s);
+                if (res != null) {
+                    System.out.println(res);
+                    return;
                 }
             }
         } catch (Exception e) {}
